@@ -14,11 +14,8 @@ def on_ui_settings():
     shared.opts.add_option("civitai_api_key", shared.OptionInfo("", "Civitai API Key (Ronin Edition)", gr.Textbox, {"visible": True}, section=section))
 script_callbacks.on_ui_settings(on_ui_settings)
 
-# --- EXTRACTOR REGEX AGRESIVO (Filtra links encimados) ---
 def parse_civitai_urls(text):
-    # Busca todos los IDs después de "models/" sin importar saltos de línea
     matches = re.findall(r'models/(\d+)', text)
-    # También busca si el usuario pegó puros números sueltos
     numbers = re.findall(r'^\d+$', text, re.MULTILINE)
     return list(set(matches + numbers))
 
@@ -40,20 +37,18 @@ def download_by_id(model_id, api_key):
     
     base_path = os.path.join(target_dir, clean_name)
     safetensors_path = f"{base_path}.safetensors"
-    info_path = f"{base_path}.civitai.info" # Raw metadata
-    forge_json_path = f"{base_path}.json" # Native A1111/Forge metadata
+    info_path = f"{base_path}.civitai.info" 
+    forge_json_path = f"{base_path}.json" 
     preview_path = f"{base_path}.preview.png"
 
     if os.path.exists(safetensors_path): return f"[SKIP] {clean_name} (Ya existe)"
 
     log = []
     try:
-        # 1. Raw Metadata para Civitai
         v_url = f"https://civitai.com/api/v1/model-versions/{version['id']}"
         v_info = requests.get(v_url, headers=headers, timeout=15).json()
         with open(info_path, 'w', encoding='utf-8') as f: json.dump(v_info, f, indent=4)
         
-        # 2. Metadata Nativa para Forge (ACTIVATION TEXT FIX)
         trained_words = version.get('trainedWords', [])
         forge_metadata = {
             "description": model_data.get('description', ""),
@@ -64,15 +59,13 @@ def download_by_id(model_id, api_key):
         }
         with open(forge_json_path, 'w', encoding='utf-8') as f: json.dump(forge_metadata, f, indent=4)
 
-        # 3. Preview con Timeout seguro (Evita crasheos por red)
         try:
             if version.get('images'):
                 img_r = requests.get(version['images'][0]['url'], timeout=30)
                 with open(preview_path, 'wb') as f: f.write(img_r.content)
-        except Exception as img_e:
+        except Exception:
             log.append(f"[WARN] Sin Preview para {clean_name}")
 
-        # 4. Safetensors
         dl_url = f"https://civitai.com/api/download/models/{version['id']}"
         r = requests.get(dl_url + f"?token={api_key}", stream=True, timeout=600)
         
@@ -91,7 +84,7 @@ def process_bulk_download(text_input, threads):
     if not api_key: return "❌ Configura tu API Key en la pestaña Settings."
     
     ids_to_download = parse_civitai_urls(text_input)
-    if not ids_to_download: return "⚠️ No se detectaron Links válidos de Civitai."
+    if not ids_to_download: return "⚠️ No se detectaron Links válidos."
 
     final_log = [f"🚀 Descargando {len(ids_to_download)} modelos por URL..."]
     with ThreadPoolExecutor(max_workers=int(threads)) as executor:
@@ -99,40 +92,40 @@ def process_bulk_download(text_input, threads):
         for future in futures: final_log.append(future.result())
     return "\n".join(final_log)
 
+def quick_add(new_url, current_list):
+    if not new_url: return current_list, ""
+    updated_list = current_list + "\n" + new_url if current_list.strip() else new_url
+    return updated_list, ""
+
 def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as civitai_flow_tab:
-        gr.Markdown("## 📡 CivitaiFlow: Hybrid Web-Downloader v6.3")
-        ui_scale = gr.Slider(minimum=1, maximum=9, step=1, value=3, label="↔️ Redimensionar Interfaz")
         
-        with gr.Row(elem_id="cf_main_row"):
-            with gr.Column(scale=3, elem_id="cf_left_panel"):
-                gr.Markdown("### 1. Panel de Ingesta (Pega los Links aquí)")
-                url_input = gr.Textbox(label="URLs de Civitai", placeholder="Pega links encimados, mezclados o separados. El sistema los extraerá.", lines=10)
+        with gr.Row():
+            # Panel Izquierdo (Fijo, Delgado)
+            with gr.Column(scale=1):
+                gr.Markdown("### 1. Ingreso de Datos")
                 
                 with gr.Row():
-                    clear_btn = gr.Button("🗑️ Limpiar Caja", variant="secondary")
-                    threads_slider = gr.Slider(minimum=1, maximum=10, step=1, label="Hilos Paralelos", value=5)
+                    quick_input = gr.Textbox(label="Inserción Rápida", placeholder="Pega el link y presiona Enter...", scale=4)
+                    quick_btn = gr.Button("➕", scale=1)
+
+                url_input = gr.Textbox(label="Lista de Descarga Masiva", placeholder="Haz clic derecho en las fotos de la derecha -> 'Copiar dirección de enlace' y pégalos aquí usando Win + V.", lines=15)
                 
-                download_btn = gr.Button("⬇️ Descargar Enlaces", variant="primary", size="lg")
-                status_log = gr.Textbox(label="Consola de Descarga", lines=6)
+                with gr.Row():
+                    clear_btn = gr.Button("🗑️ Limpiar", variant="secondary")
+                    threads_slider = gr.Slider(minimum=1, maximum=10, step=1, label="Hilos", value=5)
+                
+                download_btn = gr.Button("⬇️ Descargar Lista", variant="primary")
+                status_log = gr.Textbox(label="Consola de Status", lines=5)
 
-            with gr.Column(scale=7, elem_id="cf_right_panel"):
-                gr.HTML('<iframe src="https://civitai.com" style="width: 100%; height: 82vh; border: 2px solid #333; border-radius: 8px;"></iframe>')
+            # Panel Derecho (Fijo, Ancho)
+            with gr.Column(scale=6):
+                gr.HTML('<iframe src="https://civitai.com" style="width: 100%; height: 85vh; border: 2px solid #333; border-radius: 8px;"></iframe>')
 
-        js_resize = """
-        (val) => {
-            let left = document.getElementById('cf_left_panel');
-            let right = document.getElementById('cf_right_panel');
-            if (left && right) {
-                left.style.flexGrow = val;
-                left.style.width = (val * 10) + '%';
-                right.style.flexGrow = 10 - val;
-                right.style.width = ((10 - val) * 10) + '%';
-            }
-        }
-        """
-        ui_scale.change(fn=None, inputs=[ui_scale], js=js_resize)
-
+        # Eventos
+        quick_btn.click(fn=quick_add, inputs=[quick_input, url_input], outputs=[url_input, quick_input])
+        quick_input.submit(fn=quick_add, inputs=[quick_input, url_input], outputs=[url_input, quick_input])
+        
         download_btn.click(fn=process_bulk_download, inputs=[url_input, threads_slider], outputs=status_log)
         clear_btn.click(fn=lambda: "", inputs=[], outputs=url_input)
         
