@@ -1,53 +1,50 @@
 ﻿import os
 import requests
 import json
+import threading
 import modules.scripts as scripts
 import gradio as gr
 from modules import paths, shared, script_callbacks
-from concurrent.futures import ThreadPoolExecutor
 
 LORA_DIR = os.path.join(paths.models_path, "Lora")
 
-# --- SETTINGS ---
 def on_ui_settings():
     section = ('civitai_flow', "CivitaiFlow Manager")
     shared.opts.add_option("civitai_api_key", shared.OptionInfo("", "Civitai API Key (Ronin Edition)", gr.Textbox, {"visible": True}, section=section))
 script_callbacks.on_ui_settings(on_ui_settings)
 
-# --- FETCH DATA ---
-def fetch_raw_data(query, limit):
+def fetch_data(query, limit, page):
     api_key = shared.opts.data.get("civitai_api_key", "")
-    if not api_key: return [], gr.update(choices=[], value=[]), "❌ Configura tu API Key en Settings", []
-    if not query: return [], gr.update(choices=[], value=[]), "⚠️ Ingresa un tag válido", []
+    if not api_key: return [], "❌ Falla: Sin API Key en Settings", [], page
+    if not query: return [], "⚠️ Ingresa un tag", [], page
 
     headers = {"Authorization": f"Bearer {api_key}", "User-Agent": "Mozilla/5.0"}
-    api_url = f"https://civitai.com/api/v1/models?query={query.replace(' ', '+')}&limit={int(limit)}&types=LORA&sort=Highest+Rated"
+    api_url = f"https://civitai.com/api/v1/models?query={query.replace(' ', '+')}&limit={int(limit)}&page={int(page)}&types=LORA&sort=Highest+Rated"
     
     try:
         res = requests.get(api_url, headers=headers, timeout=15)
         models = res.json().get('items', [])
         
         if not models:
-            return [], gr.update(choices=[], value=[]), "❌ No se encontraron resultados.", []
+            return [], "❌ Fin de los resultados.", [], page
 
         gallery_images = []
-        model_names = []
-        
         for m in models:
             name = m['name']
             img_url = "https://placehold.co/400x600?text=No+Image"
             if m.get('modelVersions') and m['modelVersions'][0].get('images'):
                 img_url = m['modelVersions'][0]['images'][0]['url']
-            
             gallery_images.append((img_url, name))
-            model_names.append(name)
             
-        status = f"✅ Encontrados {len(models)} modelos. Marca las casillas en la lista de la izquierda."
-        return gallery_images, gr.update(choices=model_names, value=[]), status, models
+        return gallery_images, f"✅ Pág {page}. Haz CLIC en cualquier foto para descargar al instante.", models, page
     except Exception as e:
-        return [], gr.update(choices=[], value=[]), f"❌ Error API: {str(e)}", []
+        return [], f"❌ Error: {str(e)}", [], page
 
-# --- DOWNLOAD ENGINE ---
+def change_page(query, limit, current_page, direction):
+    new_page = max(1, current_page + direction)
+    return fetch_data(query, limit, new_page)
+
+# --- CORE DOWNLODER (Corre en Background) ---
 def download_single_item(model_data, api_key):
     headers = {"Authorization": f"Bearer {api_key}", "User-Agent": "Mozilla/5.0"}
     version = model_data['modelVersions'][0]
@@ -60,23 +57,25 @@ def download_single_item(model_data, api_key):
     
     base_path = os.path.join(target_dir, clean_name)
     safetensors_path = f"{base_path}.safetensors"
-    info_path = f"{base_path}.civitai.info" # Fix de metadata requerido por Forge
+    info_path = f"{base_path}.civitai.info" # Para el Activation Text
     preview_path = f"{base_path}.preview.png"
 
     if os.path.exists(safetensors_path):
-        return f"[SKIP] {clean_name} (Ya existe)"
+        print(f"[CivitaiFlow] SKIP: {clean_name} ya existe.")
+        return
 
-    log = []
     try:
+        # Metadatos para Forge
         v_url = f"https://civitai.com/api/v1/model-versions/{version['id']}"
         v_info = requests.get(v_url, headers=headers, timeout=10).json()
-        with open(info_path, 'w', encoding='utf-8') as f:
-            json.dump(v_info, f, indent=4)
-
+        with open(info_path, 'w', encoding='utf-8') as f: json.dump(v_info, f, indent=4)
+        
+        # Preview
         if version.get('images'):
             img_r = requests.get(version['images'][0]['url'], timeout=10)
             with open(preview_path, 'wb') as f: f.write(img_r.content)
 
+        # Safetensors
         dl_url = f"https://civitai.com/api/download/models/{version['id']}"
         r = requests.get(dl_url + f"?token={api_key}", stream=True, timeout=600)
         
@@ -84,65 +83,60 @@ def download_single_item(model_data, api_key):
             with open(safetensors_path, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     if chunk: f.write(chunk)
-            log.append(f"[OK] LORA: {clean_name}")
+            print(f"[CivitaiFlow] EXITOSO: Descargado {clean_name}")
         else:
-            log.append(f"[ERR] Falló: {clean_name} (HTTP {r.status_code})")
+            print(f"[CivitaiFlow] ERROR {r.status_code}: {clean_name}")
     except Exception as e:
-        log.append(f"[CRIT] Error en {clean_name}: {str(e)}")
-        
-    return "\n".join(log)
+        print(f"[CivitaiFlow] ERROR CRÍTICO en {clean_name}: {str(e)}")
 
-def start_download(selected_names, hidden_models_data, threads):
+# --- EL GATILLO (INSTANT TRIGGER) ---
+def instant_download(evt: gr.SelectData, hidden_data):
     api_key = shared.opts.data.get("civitai_api_key", "")
-    if not selected_names: return "⚠️ No has marcado ninguna casilla en el carrito."
+    if not api_key: return "❌ Error: Sin API Key"
     
-    models_to_download = [m for m in hidden_models_data if m['name'] in selected_names]
-    final_log = [f"🚀 Iniciando descarga paralela para {len(models_to_download)} modelos..."]
+    selected_model = hidden_data[evt.index]
+    name = selected_model['name']
     
-    with ThreadPoolExecutor(max_workers=int(threads)) as executor:
-        futures = [executor.submit(download_single_item, m, api_key) for m in models_to_download]
-        for future in futures: final_log.append(future.result())
-            
-    return "\n".join(final_log)
+    # Dispara el hilo en segundo plano (SysAdmin Magic)
+    threading.Thread(target=download_single_item, args=(selected_model, api_key), daemon=True).start()
+    
+    return f"🚀 Descarga iniciada en segundo plano: {name}"
 
 # --- UI TABS ---
 def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as civitai_flow_tab:
-        gr.Markdown("## 📡 CivitaiFlow: Visual Asset Manager (Shopping Cart UI)")
-        
         hidden_data = gr.State([])
+        current_page = gr.State(1)
 
         with gr.Row():
-            # COLUMNA IZQUIERDA: Controles y Checkboxes (Carrito)
             with gr.Column(scale=1):
-                gr.Markdown("### 1. Búsqueda")
-                search_query = gr.Textbox(label="Búsqueda por Tag", placeholder="ej: Ahri")
-                limit_slider = gr.Slider(minimum=1, maximum=30, step=1, label="Resultados a mostrar", value=12)
-                search_btn = gr.Button("🔍 Buscar Previews", variant="secondary")
+                gr.Markdown("### 1. Búsqueda y Navegación")
+                search_query = gr.Textbox(label="Tag", placeholder="ej: Ahri")
+                limit_slider = gr.Slider(minimum=10, maximum=50, step=10, label="Resultados por página", value=20)
+                search_btn = gr.Button("🔍 Buscar", variant="secondary")
+                
+                with gr.Row():
+                    prev_btn = gr.Button("⬅️ Página Anterior")
+                    next_btn = gr.Button("Página Siguiente ➡️")
                 
                 gr.Markdown("---")
-                gr.Markdown("### 2. Carrito de Descarga")
-                gr.Markdown("<small>Mira la galería a la derecha y marca aquí los que quieras bajar.</small>")
-                selected_models_checkboxes = gr.CheckboxGroup(label="Modelos Seleccionados", choices=[], elem_id="cf_checkboxes")
-                
-                threads_slider = gr.Slider(minimum=1, maximum=20, step=1, label="Hilos de Conexión (QoS)", value=5)
-                download_btn = gr.Button("⬇️ Descargar Marcados", variant="primary", size="lg")
+                gr.Markdown("### 2. Log de Acción")
+                status_log = gr.Textbox(label="Status de Gatillo", lines=3)
 
-            # COLUMNA DERECHA: Catálogo Visual
-            with gr.Column(scale=2):
-                status_log = gr.Textbox(label="Status y Consola (Live Log)", lines=4)
-                
-                gr.Markdown("### 3. Catálogo Visual (Referencia)")
-                gallery_size_slider = gr.Slider(minimum=2, maximum=8, step=1, label="Tamaño de Columnas", value=4)
-                gallery = gr.Gallery(label="Previsualización", show_label=False, columns=[4], object_fit="contain", height="auto")
+            with gr.Column(scale=3):
+                gr.Markdown("### Catálogo (Haz CLIC en una foto para descargar al instante)")
+                gallery = gr.Gallery(label="Catálogo", show_label=False, columns=[4], object_fit="contain", height="auto", allow_preview=False)
 
-        # EVENTOS
-        search_btn.click(fn=fetch_raw_data, inputs=[search_query, limit_slider], outputs=[gallery, selected_models_checkboxes, status_log, hidden_data])
-        search_query.submit(fn=fetch_raw_data, inputs=[search_query, limit_slider], outputs=[gallery, selected_models_checkboxes, status_log, hidden_data])
+        # Eventos Búsqueda
+        search_btn.click(fn=lambda q, l: fetch_data(q, l, 1), inputs=[search_query, limit_slider], outputs=[gallery, status_log, hidden_data, current_page])
+        search_query.submit(fn=lambda q, l: fetch_data(q, l, 1), inputs=[search_query, limit_slider], outputs=[gallery, status_log, hidden_data, current_page])
         
-        gallery_size_slider.change(fn=lambda x: gr.update(columns=int(x)), inputs=gallery_size_slider, outputs=gallery)
+        # Eventos Paginación
+        prev_btn.click(fn=change_page, inputs=[search_query, limit_slider, current_page, gr.State(-1)], outputs=[gallery, status_log, hidden_data, current_page])
+        next_btn.click(fn=change_page, inputs=[search_query, limit_slider, current_page, gr.State(1)], outputs=[gallery, status_log, hidden_data, current_page])
         
-        download_btn.click(fn=start_download, inputs=[selected_models_checkboxes, hidden_data, threads_slider], outputs=status_log)
+        # EL EVENTO MÁGICO: Clic en la foto = Descarga inmediata
+        gallery.select(fn=instant_download, inputs=[hidden_data], outputs=status_log)
         
     return [(civitai_flow_tab, "CivitaiFlow", "civitai_flow_tab")]
 
