@@ -26,6 +26,7 @@ def parse_civitai_urls(text):
     numbers = re.findall(r'^\d+$', text, re.MULTILINE)
     return list(set(matches + numbers))
 
+# --- MOTOR DE DESCARGA CON VALIDADOR DE ARCHIVOS (Iniciativa Ronin) ---
 def download_by_id(model_id, api_key):
     global download_status
     tracker_name = f"ID: {model_id}"
@@ -43,11 +44,32 @@ def download_by_id(model_id, api_key):
             download_status[tracker_name] = "❌ Error: Modelo no encontrado"
             return
         version = model_data['modelVersions'][0] 
+        
+        # --- VALIDADOR INTELIGENTE DE ARCHIVOS ---
+        files_list = version.get('files', [])
+        primary_file = None
+        
+        # Buscar el archivo safetensors principal de tipo "Model"
+        for f in files_list:
+            if f['type'] == 'Model' and f['name'].endswith('.safetensors'):
+                primary_file = f
+                break
+        
+        # Si no encontró ninguno explícito, usar la URL por defecto de la versión
+        if not primary_file:
+            print(f"[CivitaiFlow] WARN: No se validó safetensors para ID {model_id}. Usando descarga por defecto.")
+            download_url = f"https://civitai.com/api/download/models/{version['id']}?token={api_key}"
+            raw_filename = f"{version['id']}.safetensors"
+        else:
+            download_url = primary_file['downloadUrl'] + f"?token={api_key}"
+            raw_filename = primary_file['name']
+
     except Exception as e:
         download_status[tracker_name] = f"❌ Error API: {str(e)}"
         return
 
-    clean_name = "".join([c for c in model_data['name'] if c.isalnum() or c in (' ', '_')]).rstrip()
+    # Usar el nombre del archivo de Civitai pero sanitizado
+    clean_name = os.path.splitext("".join([c for c in raw_filename if c.isalnum() or c in (' ', '_', '.')]).rstrip())[0]
     category = model_data['tags'][0].replace(' ', '_').replace('/', '_') if model_data.get('tags') else "General"
     
     if tracker_name in download_status:
@@ -68,7 +90,7 @@ def download_by_id(model_id, api_key):
         return
 
     try:
-        download_status[tracker_name] = "⏳ Descargando Metadatos..."
+        download_status[tracker_name] = "⏳ Metadatos..."
         v_url = f"https://civitai.com/api/v1/model-versions/{version['id']}"
         v_info = requests.get(v_url, headers=headers, timeout=15).json()
         with open(info_path, 'w', encoding='utf-8') as f: json.dump(v_info, f, indent=4)
@@ -89,8 +111,8 @@ def download_by_id(model_id, api_key):
                 with open(preview_path, 'wb') as f: f.write(img_r.content)
             except: pass
 
-        dl_url = f"https://civitai.com/api/download/models/{version['id']}"
-        r = requests.get(dl_url + f"?token={api_key}", stream=True, timeout=600)
+        # Descarga con Telemetría Avanzada
+        r = requests.get(download_url, headers=headers, stream=True, timeout=600)
         
         if r.status_code == 200:
             total_size = int(r.headers.get('content-length', 0))
@@ -167,15 +189,38 @@ def open_lora_folder():
     except Exception:
         pass
 
+# --- FUNCIÓN DE LIMPIEZA DE LOGS (Specific Request) ---
+def clear_log_dashboard():
+    global download_status
+    with task_lock:
+        # Solo limpiar si no hay tareas activas para evitar bugs visuals
+        if active_tasks == 0:
+            download_status.clear()
+            return ""
+        else:
+            return gr.update() # No hacer nada si está descargando
+
 def on_ui_tabs():
-    with gr.Blocks(analytics_enabled=False) as civitai_flow_tab:
+    # Inyectar CSS mini para el botón de limpiar logs
+    mini_btn_css = """
+    #cf_clear_log_btn {
+        min-width: auto !important;
+        padding: 0px 6px !important;
+        height: 1.5em !important;
+        font-size: 11px !important;
+        margin-left: 10px !important;
+        display: inline-flex !important;
+        align-items: center !important;
+    }
+    """
+    
+    with gr.Blocks(analytics_enabled=False, css=mini_btn_css) as civitai_flow_tab:
         with gr.Row():
             
-            # Panel Izquierdo (Rediseñado como Dashboard)
+            # Panel Izquierdo
             with gr.Column(scale=1):
                 gr.Markdown("### 📡 Centro de Mando")
                 
-                # Grupo visual principal
                 with gr.Group():
                     url_input = gr.Textbox(
                         label="📥 Enlaces de Ingesta (Win + V)", 
@@ -189,14 +234,17 @@ def on_ui_tabs():
                     
                     download_btn = gr.Button("🚀 Añadir a Cola y Procesar", variant="primary", size="lg")
                 
-                # Ajustes secundarios colapsables
                 with gr.Accordion("⚙️ Configuración de Red", open=False):
                     threads_slider = gr.Slider(minimum=1, maximum=10, step=1, label="Descargas Simultáneas", value=5)
                 
                 gr.Markdown("<br>") # Espaciador
                 
-                # Monitor
-                status_log = gr.Textbox(label="📊 Monitor de Tráfico (Live)", lines=12)
+                # Monitor con mini botón de limpiar (Specific Request)
+                with gr.Row(variant="compact"):
+                    gr.Markdown("#### 📊 Monitor de Tráfico (Live)", elem_id="cf_log_header")
+                    clear_log_btn = gr.Button("Limpiar 🗑️", variant="secondary", elem_id="cf_clear_log_btn")
+
+                status_log = gr.Textbox(label="Status Log Output", show_label=False, lines=12)
 
             # Panel Derecho (Explorador)
             with gr.Column(scale=6):
@@ -206,6 +254,9 @@ def on_ui_tabs():
         download_btn.click(fn=process_bulk_download_live, inputs=[url_input, threads_slider], outputs=status_log)
         clear_btn.click(fn=lambda: "", inputs=[], outputs=url_input)
         folder_btn.click(fn=open_lora_folder, inputs=[], outputs=[])
+        
+        # Evento específico para limpiar logs
+        clear_log_btn.click(fn=clear_log_dashboard, inputs=[], outputs=status_log)
         
     return [(civitai_flow_tab, "CivitaiFlow", "civitai_flow_tab")]
 
