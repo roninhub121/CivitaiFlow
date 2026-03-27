@@ -220,7 +220,7 @@ def clear_log_dashboard():
 
 # --- INTERFAZ UI ---
 def on_ui_tabs():
-    mini_btn_css = """
+    custom_css = """
     #cf_clear_log_btn {
         min-width: auto !important;
         padding: 0px 6px !important;
@@ -233,10 +233,15 @@ def on_ui_tabs():
     #cf_log_header_row {
         align-items: center !important;
     }
+    #cf_poll_btn {
+        display: none !important;
+    }
     """
     
-    with gr.Blocks(analytics_enabled=False, css=mini_btn_css) as civitai_flow_tab:
-        poll_btn = gr.Button("poll", visible=False, elem_id="cf_poll_btn")
+    with gr.Blocks(analytics_enabled=False, css=custom_css) as civitai_flow_tab:
+        
+        # Botón ninja oculto con CSS en lugar de visible=False para que Gradio no lo mate
+        poll_btn = gr.Button("poll", elem_id="cf_poll_btn")
 
         with gr.Row():
             with gr.Column(scale=1):
@@ -246,7 +251,7 @@ def on_ui_tabs():
                     sniper_mode = gr.Checkbox(label="🎯 Activar Modo Sniper (Auto-Capturar Links)", value=False)
                     url_input = gr.Textbox(
                         label="📥 Enlaces de Ingesta", 
-                        placeholder="Activa el Modo Sniper arriba, haz clic derecho -> copiar enlace en las portadas, y mira cómo aparecen solos aquí...", 
+                        placeholder="Activa el Modo Sniper, haz clic derecho -> copiar enlace, y mira cómo aparecen solos aquí...", 
                         lines=10
                     )
                     
@@ -261,7 +266,6 @@ def on_ui_tabs():
                 
                 gr.Markdown("<br>")
                 
-                # BUG FIX: Eliminado el 'variant="compact"' que causaba el crasheo
                 with gr.Row(elem_id="cf_log_header_row"):
                     gr.Markdown("#### 📊 Monitor de Tráfico")
                     clear_log_btn = gr.Button("Limpiar 🗑️", variant="secondary", elem_id="cf_clear_log_btn")
@@ -278,18 +282,21 @@ def on_ui_tabs():
         folder_btn.click(fn=open_lora_folder, inputs=[], outputs=[])
         clear_log_btn.click(fn=clear_log_dashboard, inputs=[], outputs=status_log)
         
-        js_onload = """
-        () => {
-            if (!window.cf_poller_active) {
-                window.cf_poller_active = true;
-                setInterval(() => {
+        # JS Inyectado de manera segura en el evento de la checkbox
+        js_sniper = """
+        (enabled) => {
+            if (enabled) {
+                window.cf_sniper_interval = setInterval(() => {
                     let btn = document.getElementById('cf_poll_btn');
                     if (btn) btn.click();
-                }, 1500); 
+                }, 1500);
+            } else {
+                if (window.cf_sniper_interval) clearInterval(window.cf_sniper_interval);
             }
+            return enabled;
         }
         """
-        civitai_flow_tab.load(fn=None, inputs=[], outputs=[], _js=js_onload)
+        sniper_mode.change(fn=None, inputs=[sniper_mode], outputs=[], js=js_sniper)
         
     return [(civitai_flow_tab, "CivitaiFlow", "civitai_flow_tab")]
 
