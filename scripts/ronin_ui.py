@@ -1,10 +1,12 @@
 ﻿import os
 import requests
 import json
+import re
 import threading
 import modules.scripts as scripts
 import gradio as gr
 from modules import paths, shared, script_callbacks
+from concurrent.futures import ThreadPoolExecutor
 
 LORA_DIR = os.path.join(paths.models_path, "Lora")
 
@@ -13,42 +15,36 @@ def on_ui_settings():
     shared.opts.add_option("civitai_api_key", shared.OptionInfo("", "Civitai API Key (Ronin Edition)", gr.Textbox, {"visible": True}, section=section))
 script_callbacks.on_ui_settings(on_ui_settings)
 
-def fetch_data(query, limit, page):
-    api_key = shared.opts.data.get("civitai_api_key", "")
-    if not api_key: return [], "❌ Falla: Sin API Key en Settings", [], page
-    if not query: return [], "⚠️ Ingresa un tag", [], page
+# --- EXTRACTOR DE IDs ---
+def parse_civitai_urls(text):
+    ids = []
+    for line in text.split('\n'):
+        line = line.strip()
+        if not line: continue
+        # Busca el ID numérico después de "models/"
+        match = re.search(r'models/(\d+)', line)
+        if match:
+            ids.append(match.group(1))
+        # Si el usuario solo pegó el número
+        elif line.isdigit():
+            ids.append(line)
+    return list(set(ids)) # Quitar duplicados
 
+# --- MOTOR DE DESCARGA DIRECTA POR ID ---
+def download_by_id(model_id, api_key):
     headers = {"Authorization": f"Bearer {api_key}", "User-Agent": "Mozilla/5.0"}
-    api_url = f"https://civitai.com/api/v1/models?query={query.replace(' ', '+')}&limit={int(limit)}&page={int(page)}&types=LORA&sort=Highest+Rated"
     
+    # 1. Obtener la metadata general del modelo
     try:
-        res = requests.get(api_url, headers=headers, timeout=15)
-        models = res.json().get('items', [])
-        
-        if not models:
-            return [], "❌ Fin de los resultados.", [], page
-
-        gallery_images = []
-        for m in models:
-            name = m['name']
-            img_url = "https://placehold.co/400x600?text=No+Image"
-            if m.get('modelVersions') and m['modelVersions'][0].get('images'):
-                img_url = m['modelVersions'][0]['images'][0]['url']
-            gallery_images.append((img_url, name))
+        model_url = f"https://civitai.com/api/v1/models/{model_id}"
+        model_data = requests.get(model_url, headers=headers, timeout=10).json()
+        if 'modelVersions' not in model_data:
+            return f"[ERR] No se encontró el modelo {model_id}"
             
-        return gallery_images, f"✅ Pág {page}. Haz CLIC en cualquier foto para descargar al instante.", models, page
+        version = model_data['modelVersions'][0] # Tomar la última versión
     except Exception as e:
-        return [], f"❌ Error: {str(e)}", [], page
+        return f"[CRIT] Falla al conectar con API para ID {model_id}: {str(e)}"
 
-def change_page(query, limit, current_page, direction):
-    new_page = max(1, current_page + direction)
-    return fetch_data(query, limit, new_page)
-
-# --- CORE DOWNLODER (Corre en Background) ---
-def download_single_item(model_data, api_key):
-    headers = {"Authorization": f"Bearer {api_key}", "User-Agent": "Mozilla/5.0"}
-    version = model_data['modelVersions'][0]
-    
     clean_name = "".join([c for c in model_data['name'] if c.isalnum() or c in (' ', '_')]).rstrip()
     category = model_data['tags'][0].replace(' ', '_').replace('/', '_') if model_data.get('tags') else "General"
     
@@ -57,25 +53,25 @@ def download_single_item(model_data, api_key):
     
     base_path = os.path.join(target_dir, clean_name)
     safetensors_path = f"{base_path}.safetensors"
-    info_path = f"{base_path}.civitai.info" # Para el Activation Text
+    info_path = f"{base_path}.civitai.info" # Para Forge Activation Words
     preview_path = f"{base_path}.preview.png"
 
     if os.path.exists(safetensors_path):
-        print(f"[CivitaiFlow] SKIP: {clean_name} ya existe.")
-        return
+        return f"[SKIP] {clean_name} (Ya existe)"
 
+    log = []
     try:
-        # Metadatos para Forge
+        # A. Metadatos de la versión específica
         v_url = f"https://civitai.com/api/v1/model-versions/{version['id']}"
         v_info = requests.get(v_url, headers=headers, timeout=10).json()
         with open(info_path, 'w', encoding='utf-8') as f: json.dump(v_info, f, indent=4)
         
-        # Preview
+        # B. Preview
         if version.get('images'):
             img_r = requests.get(version['images'][0]['url'], timeout=10)
             with open(preview_path, 'wb') as f: f.write(img_r.content)
 
-        # Safetensors
+        # C. Safetensors
         dl_url = f"https://civitai.com/api/download/models/{version['id']}"
         r = requests.get(dl_url + f"?token={api_key}", stream=True, timeout=600)
         
@@ -83,60 +79,55 @@ def download_single_item(model_data, api_key):
             with open(safetensors_path, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     if chunk: f.write(chunk)
-            print(f"[CivitaiFlow] EXITOSO: Descargado {clean_name}")
+            log.append(f"[OK] {clean_name}")
         else:
-            print(f"[CivitaiFlow] ERROR {r.status_code}: {clean_name}")
+            log.append(f"[ERR] {clean_name} (HTTP {r.status_code})")
     except Exception as e:
-        print(f"[CivitaiFlow] ERROR CRÍTICO en {clean_name}: {str(e)}")
+        log.append(f"[CRIT] Error en {clean_name}: {str(e)}")
+        
+    return "\n".join(log)
 
-# --- EL GATILLO (INSTANT TRIGGER) ---
-def instant_download(evt: gr.SelectData, hidden_data):
+def process_bulk_download(text_input, threads):
     api_key = shared.opts.data.get("civitai_api_key", "")
-    if not api_key: return "❌ Error: Sin API Key"
+    if not api_key: return "❌ Configura tu API Key en la pestaña Settings."
     
-    selected_model = hidden_data[evt.index]
-    name = selected_model['name']
+    ids_to_download = parse_civitai_urls(text_input)
+    if not ids_to_download: return "⚠️ No se detectaron Links válidos de Civitai."
+
+    final_log = [f"🚀 Iniciando descarga de {len(ids_to_download)} modelos por URL..."]
     
-    # Dispara el hilo en segundo plano (SysAdmin Magic)
-    threading.Thread(target=download_single_item, args=(selected_model, api_key), daemon=True).start()
-    
-    return f"🚀 Descarga iniciada en segundo plano: {name}"
+    with ThreadPoolExecutor(max_workers=int(threads)) as executor:
+        futures = [executor.submit(download_by_id, m_id, api_key) for m_id in ids_to_download]
+        for future in futures: final_log.append(future.result())
+            
+    return "\n".join(final_log)
 
 # --- UI TABS ---
 def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as civitai_flow_tab:
-        hidden_data = gr.State([])
-        current_page = gr.State(1)
-
+        gr.Markdown("## 📡 CivitaiFlow: Hybrid Web-Downloader")
+        
         with gr.Row():
+            # COLUMNA IZQUIERDA: Herramienta de Descarga
             with gr.Column(scale=1):
-                gr.Markdown("### 1. Búsqueda y Navegación")
-                search_query = gr.Textbox(label="Tag", placeholder="ej: Ahri")
-                limit_slider = gr.Slider(minimum=10, maximum=50, step=10, label="Resultados por página", value=20)
-                search_btn = gr.Button("🔍 Buscar", variant="secondary")
+                gr.Markdown("### 1. Panel de Ingesta (Pega los Links aquí)")
+                gr.Markdown("<small>Navega a la derecha, haz clic derecho en los modelos que te gusten, selecciona 'Copiar enlace' y pégalos aquí abajo (uno por línea).</small>")
                 
-                with gr.Row():
-                    prev_btn = gr.Button("⬅️ Página Anterior")
-                    next_btn = gr.Button("Página Siguiente ➡️")
+                url_input = gr.Textbox(label="URLs de Civitai", placeholder="https://civitai.com/models/12345/...\nhttps://civitai.com/models/67890/...", lines=10)
+                threads_slider = gr.Slider(minimum=1, maximum=10, step=1, label="Hilos Paralelos", value=3)
+                download_btn = gr.Button("⬇️ Descargar Enlaces", variant="primary")
                 
                 gr.Markdown("---")
-                gr.Markdown("### 2. Log de Acción")
-                status_log = gr.Textbox(label="Status de Gatillo", lines=3)
+                status_log = gr.Textbox(label="Consola de Descarga", lines=8)
 
-            with gr.Column(scale=3):
-                gr.Markdown("### Catálogo (Haz CLIC en una foto para descargar al instante)")
-                gallery = gr.Gallery(label="Catálogo", show_label=False, columns=[4], object_fit="contain", height="auto", allow_preview=False)
+            # COLUMNA DERECHA: IFRAME con la página web
+            with gr.Column(scale=2):
+                gr.Markdown("### 2. Explorador Web Civitai")
+                # Incrustamos la página real.
+                gr.HTML('<iframe src="https://civitai.com" style="width: 100%; height: 85vh; border: 2px solid #333; border-radius: 8px;"></iframe>')
 
-        # Eventos Búsqueda
-        search_btn.click(fn=lambda q, l: fetch_data(q, l, 1), inputs=[search_query, limit_slider], outputs=[gallery, status_log, hidden_data, current_page])
-        search_query.submit(fn=lambda q, l: fetch_data(q, l, 1), inputs=[search_query, limit_slider], outputs=[gallery, status_log, hidden_data, current_page])
-        
-        # Eventos Paginación
-        prev_btn.click(fn=change_page, inputs=[search_query, limit_slider, current_page, gr.State(-1)], outputs=[gallery, status_log, hidden_data, current_page])
-        next_btn.click(fn=change_page, inputs=[search_query, limit_slider, current_page, gr.State(1)], outputs=[gallery, status_log, hidden_data, current_page])
-        
-        # EL EVENTO MÁGICO: Clic en la foto = Descarga inmediata
-        gallery.select(fn=instant_download, inputs=[hidden_data], outputs=status_log)
+        # Eventos
+        download_btn.click(fn=process_bulk_download, inputs=[url_input, threads_slider], outputs=status_log)
         
     return [(civitai_flow_tab, "CivitaiFlow", "civitai_flow_tab")]
 
