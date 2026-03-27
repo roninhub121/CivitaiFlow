@@ -23,7 +23,7 @@ def on_ui_settings():
     shared.opts.add_option("civitai_api_key", shared.OptionInfo("", "Civitai API Key (Ronin Edition)", gr.Textbox, {"visible": True}, section=section))
 script_callbacks.on_ui_settings(on_ui_settings)
 
-# --- HOOK NATIVO DE WINDOWS (SNIPER MODE) ---
+# --- HOOK NATIVO DE WINDOWS ---
 def get_windows_clipboard():
     try:
         if not ctypes.windll.user32.OpenClipboard(0): return ""
@@ -41,25 +41,13 @@ def get_windows_clipboard():
         except: pass
         return ""
 
-def auto_paste_clipboard(current_text, is_sniper_on):
-    if not is_sniper_on: return gr.update()
-    global last_copied_url
-    clip = get_windows_clipboard()
-    
-    if clip and isinstance(clip, str) and clip != last_copied_url:
-        if "civitai.com/models/" in clip:
-            last_copied_url = clip
-            new_text = current_text.strip() + "\n" + clip if current_text.strip() else clip
-            return new_text
-            
-    return gr.update() 
-
-# --- UTILS & DOWNLOAD ENGINE ---
 def parse_civitai_urls(text):
+    text = text or ""
     matches = re.findall(r'models/(\d+)', text)
     numbers = re.findall(r'^\d+$', text, re.MULTILINE)
     return list(set(matches + numbers))
 
+# --- MOTOR DE DESCARGA ---
 def download_by_id(model_id, api_key):
     global download_status
     tracker_name = f"ID: {model_id}"
@@ -163,24 +151,61 @@ def download_by_id(model_id, api_key):
     except Exception as e:
         download_status[tracker_name] = f"❌ Error Crítico: {str(e)}"
 
-def process_bulk_download_live(text_input, threads):
-    global download_status, active_tasks
-    
+# --- POLLER UNIVERSAL (Actualiza UI, Lee Portapapeles y Dispara Auto-Descargas) ---
+def universal_poller(current_text, is_sniper_on, is_auto_dl_on, threads):
+    global last_copied_url, active_tasks, download_status, task_lock
     api_key = shared.opts.data.get("civitai_api_key", "")
-    if not api_key: 
-        yield "❌ Error: Configura tu API Key en Settings."
-        return
-        
-    ids_to_download = parse_civitai_urls(text_input)
-    if not ids_to_download: 
-        yield "⚠️ No se detectaron Links válidos."
-        return
+    current_text = current_text or "" # Fix del error 'NoneType'
+    text_update = gr.update()
+    log_update = gr.update()
+    
+    # 1. Modo Sniper
+    if is_sniper_on:
+        clip = get_windows_clipboard()
+        if clip and isinstance(clip, str) and clip != last_copied_url:
+            if "civitai.com/models/" in clip:
+                last_copied_url = clip
+                text_update = current_text.strip() + "\n" + clip if current_text.strip() else clip
+                
+                # 2. Auto-Descarga al detectar
+                if is_auto_dl_on:
+                    ids = parse_civitai_urls(clip)
+                    if ids:
+                        with task_lock:
+                            if active_tasks == 0: download_status.clear()
+                            active_tasks += len(ids)
+                        def run_dl():
+                            with ThreadPoolExecutor(max_workers=int(threads)) as executor:
+                                for m_id in ids:
+                                    download_by_id(m_id, api_key)
+                                    with task_lock:
+                                        global active_tasks
+                                        active_tasks -= 1
+                        threading.Thread(target=run_dl, daemon=True).start()
 
-    def task_wrapper(m_id):
-        global active_tasks
-        download_by_id(m_id, api_key)
-        with task_lock:
-            active_tasks -= 1
+    # 3. Refresco Visual de la Consola
+    if active_tasks > 0:
+        log_lines = [f"📊 TAREAS EN COLA: {active_tasks}\n" + "-"*30]
+        for name, status in download_status.items():
+            log_lines.append(f"📦 {name}\n   └─ {status}\n")
+        log_update = "\n".join(log_lines)
+    else:
+        if len(download_status) > 0:
+            log_lines = ["🚀 TODAS LAS TAREAS FINALIZADAS\n" + "="*30]
+            for name, status in download_status.items():
+                log_lines.append(f"📦 {name}\n   └─ {status}\n")
+            log_update = "\n".join(log_lines)
+
+    return text_update, log_update
+
+def manual_download_trigger(text_input, threads):
+    global download_status, active_tasks, task_lock
+    api_key = shared.opts.data.get("civitai_api_key", "")
+    if not api_key: return "❌ Error: Configura tu API Key en Settings."
+    
+    text_input = text_input or ""
+    ids_to_download = parse_civitai_urls(text_input)
+    if not ids_to_download: return "⚠️ No se detectaron Links válidos."
 
     with task_lock:
         if active_tasks == 0: download_status.clear() 
@@ -189,34 +214,26 @@ def process_bulk_download_live(text_input, threads):
     def run_downloads():
         with ThreadPoolExecutor(max_workers=int(threads)) as executor:
             for m_id in ids_to_download:
-                executor.submit(task_wrapper, m_id)
-                
+                download_by_id(m_id, api_key)
+                with task_lock:
+                    global active_tasks
+                    active_tasks -= 1
+                    
     threading.Thread(target=run_downloads, daemon=True).start()
-
-    while active_tasks > 0:
-        time.sleep(0.5) 
-        log_lines = [f"📊 TAREAS EN COLA: {active_tasks}\n" + "-"*30]
-        for name, status in download_status.items():
-            log_lines.append(f"📦 {name}\n   └─ {status}\n")
-        yield "\n".join(log_lines)
-        
-    log_lines = ["🚀 TODAS LAS RÁFAGAS FINALIZADAS\n" + "="*30]
-    for name, status in download_status.items():
-        log_lines.append(f"📦 {name}\n   └─ {status}\n")
-    yield "\n".join(log_lines)
-
-def open_lora_folder():
-    os.makedirs(LORA_DIR, exist_ok=True)
-    try: os.startfile(LORA_DIR)
-    except: pass
+    return "🚀 Procesando cola..."
 
 def clear_log_dashboard():
     global download_status
     with task_lock:
         if active_tasks == 0:
             download_status.clear()
-            return ""
+            return "🗑️ Consola limpiada."
         return gr.update()
+
+def open_lora_folder():
+    os.makedirs(LORA_DIR, exist_ok=True)
+    try: os.startfile(LORA_DIR)
+    except: pass
 
 # --- INTERFAZ UI ---
 def on_ui_tabs():
@@ -235,12 +252,18 @@ def on_ui_tabs():
     }
     #cf_poll_btn {
         display: none !important;
+        position: absolute !important;
+        top: -9999px !important;
+        width: 0 !important;
+        height: 0 !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
     }
     """
     
     with gr.Blocks(analytics_enabled=False, css=custom_css) as civitai_flow_tab:
         
-        # Botón ninja oculto con CSS en lugar de visible=False para que Gradio no lo mate
+        # Botón ninja anclado y totalmente invisible para el JS
         poll_btn = gr.Button("poll", elem_id="cf_poll_btn")
 
         with gr.Row():
@@ -248,18 +271,21 @@ def on_ui_tabs():
                 gr.Markdown("### 📡 Centro de Mando")
                 
                 with gr.Group():
-                    sniper_mode = gr.Checkbox(label="🎯 Activar Modo Sniper (Auto-Capturar Links)", value=False)
+                    with gr.Row():
+                        sniper_mode = gr.Checkbox(label="🎯 Modo Sniper", value=False)
+                        auto_dl_mode = gr.Checkbox(label="⚡ Auto-Descargar", value=False)
+                        
                     url_input = gr.Textbox(
                         label="📥 Enlaces de Ingesta", 
-                        placeholder="Activa el Modo Sniper, haz clic derecho -> copiar enlace, y mira cómo aparecen solos aquí...", 
+                        placeholder="Copia enlaces web y se pegarán aquí solos con el Sniper...", 
                         lines=10
                     )
                     
                     with gr.Row():
-                        clear_btn = gr.Button("🗑️ Limpiar", variant="secondary")
+                        clear_btn = gr.Button("🗑️ Limpiar Caja", variant="secondary")
                         folder_btn = gr.Button("📂 Ver LoRAs", variant="secondary")
                     
-                    download_btn = gr.Button("🚀 Añadir a Cola y Procesar", variant="primary", size="lg")
+                    download_btn = gr.Button("🚀 Procesar Lista Manualmente", variant="primary", size="lg")
                 
                 with gr.Accordion("⚙️ Configuración de Red", open=False):
                     threads_slider = gr.Slider(minimum=1, maximum=10, step=1, label="Descargas Simultáneas", value=5)
@@ -276,27 +302,27 @@ def on_ui_tabs():
                 gr.HTML('<iframe src="https://civitai.com" style="width: 100%; height: 85vh; border: 2px solid #333; border-radius: 8px;"></iframe>')
 
         # --- EVENTOS ---
-        poll_btn.click(fn=auto_paste_clipboard, inputs=[url_input, sniper_mode], outputs=[url_input])
-        download_btn.click(fn=process_bulk_download_live, inputs=[url_input, threads_slider], outputs=status_log)
+        # El Poller actualiza texto, log y dispara auto-descargas
+        poll_btn.click(fn=universal_poller, inputs=[url_input, sniper_mode, auto_dl_mode, threads_slider], outputs=[url_input, status_log])
+        
+        # Botones manuales
+        download_btn.click(fn=manual_download_trigger, inputs=[url_input, threads_slider], outputs=status_log)
         clear_btn.click(fn=lambda: "", inputs=[], outputs=url_input)
         folder_btn.click(fn=open_lora_folder, inputs=[], outputs=[])
         clear_log_btn.click(fn=clear_log_dashboard, inputs=[], outputs=status_log)
         
-        # JS Inyectado de manera segura en el evento de la checkbox
-        js_sniper = """
-        (enabled) => {
-            if (enabled) {
-                window.cf_sniper_interval = setInterval(() => {
+        js_onload = """
+        () => {
+            if (!window.cf_poller_active) {
+                window.cf_poller_active = true;
+                setInterval(() => {
                     let btn = document.getElementById('cf_poll_btn');
                     if (btn) btn.click();
-                }, 1500);
-            } else {
-                if (window.cf_sniper_interval) clearInterval(window.cf_sniper_interval);
+                }, 1500); 
             }
-            return enabled;
         }
         """
-        sniper_mode.change(fn=None, inputs=[sniper_mode], outputs=[], js=js_sniper)
+        civitai_flow_tab.load(fn=None, inputs=[], outputs=[], _js=js_onload)
         
     return [(civitai_flow_tab, "CivitaiFlow", "civitai_flow_tab")]
 
