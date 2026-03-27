@@ -30,7 +30,6 @@ def download_by_id(model_id, api_key):
     global download_status
     tracker_name = f"ID: {model_id}"
     
-    # Evitar doble procesamiento si ya se está descargando en esta sesión
     if tracker_name in download_status and "⬇️" in download_status[tracker_name]:
         return
 
@@ -51,7 +50,6 @@ def download_by_id(model_id, api_key):
     clean_name = "".join([c for c in model_data['name'] if c.isalnum() or c in (' ', '_')]).rstrip()
     category = model_data['tags'][0].replace(' ', '_').replace('/', '_') if model_data.get('tags') else "General"
     
-    # Actualizar nombre real en el tracker
     if tracker_name in download_status:
         del download_status[tracker_name]
     tracker_name = clean_name
@@ -65,7 +63,6 @@ def download_by_id(model_id, api_key):
     forge_json_path = f"{base_path}.json" 
     preview_path = f"{base_path}.preview.png"
 
-    # HARD SKIP: Si ya existe, ni lo tocamos
     if os.path.exists(safetensors_path): 
         download_status[tracker_name] = "⏭️ Omitido (Localizado en disco)"
         return
@@ -92,7 +89,6 @@ def download_by_id(model_id, api_key):
                 with open(preview_path, 'wb') as f: f.write(img_r.content)
             except: pass
 
-        # Descarga con Telemetría
         dl_url = f"https://civitai.com/api/download/models/{version['id']}"
         r = requests.get(dl_url + f"?token={api_key}", stream=True, timeout=600)
         
@@ -140,8 +136,10 @@ def process_bulk_download_live(text_input, threads):
         with task_lock:
             active_tasks -= 1
 
-    # Sumar tareas a la cola global
+    # AQUÍ ESTÁ EL FIX DEL BUG (Limpia el historial si inicias una sesión nueva)
     with task_lock:
+        if active_tasks == 0:
+            download_status.clear() 
         active_tasks += len(ids_to_download)
         
     def run_downloads():
@@ -151,7 +149,6 @@ def process_bulk_download_live(text_input, threads):
                 
     threading.Thread(target=run_downloads, daemon=True).start()
 
-    # Bucle UI (Se mantiene vivo mientras haya tareas)
     while active_tasks > 0:
         time.sleep(0.5) 
         log_lines = [f"📊 TAREAS EN COLA: {active_tasks}\n" + "-"*30]
@@ -159,15 +156,20 @@ def process_bulk_download_live(text_input, threads):
             log_lines.append(f"📦 {name}\n   └─ {status}\n")
         yield "\n".join(log_lines)
         
-    # Fin de todas las tareas
     log_lines = ["🚀 TODAS LAS RÁFAGAS FINALIZADAS\n" + "="*30]
     for name, status in download_status.items():
         log_lines.append(f"📦 {name}\n   └─ {status}\n")
     yield "\n".join(log_lines)
 
+def open_lora_folder():
+    os.makedirs(LORA_DIR, exist_ok=True)
+    try:
+        os.startfile(LORA_DIR)
+    except Exception:
+        pass
+
 def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as civitai_flow_tab:
-        
         with gr.Row():
             with gr.Column(scale=1):
                 gr.Markdown("### 1. Lista de Ingesta")
@@ -175,9 +177,10 @@ def on_ui_tabs():
                 
                 with gr.Row():
                     clear_btn = gr.Button("🗑️ Limpiar Caja", variant="secondary")
-                    threads_slider = gr.Slider(minimum=1, maximum=10, step=1, label="Descargas Simultáneas", value=5)
+                    folder_btn = gr.Button("📂 Abrir Carpeta LoRAs", variant="secondary")
                 
-                download_btn = gr.Button("⬇️ Añadir a la Cola / Iniciar", variant="primary")
+                threads_slider = gr.Slider(minimum=1, maximum=10, step=1, label="Descargas Simultáneas", value=5)
+                download_btn = gr.Button("⬇️ Añadir a la Cola / Iniciar", variant="primary", size="lg")
                 
                 gr.Markdown("---")
                 status_log = gr.Textbox(label="Monitor de Tráfico (Live)", lines=12)
@@ -187,6 +190,7 @@ def on_ui_tabs():
 
         download_btn.click(fn=process_bulk_download_live, inputs=[url_input, threads_slider], outputs=status_log)
         clear_btn.click(fn=lambda: "", inputs=[], outputs=url_input)
+        folder_btn.click(fn=open_lora_folder, inputs=[], outputs=[])
         
     return [(civitai_flow_tab, "CivitaiFlow", "civitai_flow_tab")]
 
