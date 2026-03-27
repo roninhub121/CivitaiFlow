@@ -151,11 +151,11 @@ def download_by_id(model_id, api_key):
     except Exception as e:
         download_status[tracker_name] = f"❌ Error Crítico: {str(e)}"
 
-# --- POLLER UNIVERSAL (Actualiza UI, Lee Portapapeles y Dispara Auto-Descargas) ---
+# --- POLLER UNIVERSAL A PRUEBA DE BALAS ---
 def universal_poller(current_text, is_sniper_on, is_auto_dl_on, threads):
     global last_copied_url, active_tasks, download_status, task_lock
     api_key = shared.opts.data.get("civitai_api_key", "")
-    current_text = current_text or "" # Fix del error 'NoneType'
+    current_text = current_text or "" 
     text_update = gr.update()
     log_update = gr.update()
     
@@ -263,7 +263,7 @@ def on_ui_tabs():
     
     with gr.Blocks(analytics_enabled=False, css=custom_css) as civitai_flow_tab:
         
-        # Botón ninja anclado y totalmente invisible para el JS
+        # Botón ninja anclado y totalmente invisible
         poll_btn = gr.Button("poll", elem_id="cf_poll_btn")
 
         with gr.Row():
@@ -302,15 +302,14 @@ def on_ui_tabs():
                 gr.HTML('<iframe src="https://civitai.com" style="width: 100%; height: 85vh; border: 2px solid #333; border-radius: 8px;"></iframe>')
 
         # --- EVENTOS ---
-        # El Poller actualiza texto, log y dispara auto-descargas
         poll_btn.click(fn=universal_poller, inputs=[url_input, sniper_mode, auto_dl_mode, threads_slider], outputs=[url_input, status_log])
         
-        # Botones manuales
         download_btn.click(fn=manual_download_trigger, inputs=[url_input, threads_slider], outputs=status_log)
         clear_btn.click(fn=lambda: "", inputs=[], outputs=url_input)
         folder_btn.click(fn=open_lora_folder, inputs=[], outputs=[])
         clear_log_btn.click(fn=clear_log_dashboard, inputs=[], outputs=status_log)
         
+        # Inyección super segura: corre siempre, pero Python decide si hace caso o no.
         js_onload = """
         () => {
             if (!window.cf_poller_active) {
