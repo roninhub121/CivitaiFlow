@@ -14,21 +14,19 @@ def on_ui_settings():
     shared.opts.add_option("civitai_api_key", shared.OptionInfo("", "Civitai API Key (Ronin Edition)", gr.Textbox, {"visible": True}, section=section))
 script_callbacks.on_ui_settings(on_ui_settings)
 
+# --- EXTRACTOR REGEX AGRESIVO (Filtra links encimados) ---
 def parse_civitai_urls(text):
-    ids = []
-    for line in text.split('\n'):
-        line = line.strip()
-        if not line: continue
-        match = re.search(r'models/(\d+)', line)
-        if match: ids.append(match.group(1))
-        elif line.isdigit(): ids.append(line)
-    return list(set(ids))
+    # Busca todos los IDs después de "models/" sin importar saltos de línea
+    matches = re.findall(r'models/(\d+)', text)
+    # También busca si el usuario pegó puros números sueltos
+    numbers = re.findall(r'^\d+$', text, re.MULTILINE)
+    return list(set(matches + numbers))
 
 def download_by_id(model_id, api_key):
     headers = {"Authorization": f"Bearer {api_key}", "User-Agent": "Mozilla/5.0"}
     try:
         model_url = f"https://civitai.com/api/v1/models/{model_id}"
-        model_data = requests.get(model_url, headers=headers, timeout=10).json()
+        model_data = requests.get(model_url, headers=headers, timeout=15).json()
         if 'modelVersions' not in model_data: return f"[ERR] No se encontró el modelo {model_id}"
         version = model_data['modelVersions'][0] 
     except Exception as e:
@@ -42,21 +40,39 @@ def download_by_id(model_id, api_key):
     
     base_path = os.path.join(target_dir, clean_name)
     safetensors_path = f"{base_path}.safetensors"
-    info_path = f"{base_path}.civitai.info" 
+    info_path = f"{base_path}.civitai.info" # Raw metadata
+    forge_json_path = f"{base_path}.json" # Native A1111/Forge metadata
     preview_path = f"{base_path}.preview.png"
 
     if os.path.exists(safetensors_path): return f"[SKIP] {clean_name} (Ya existe)"
 
     log = []
     try:
+        # 1. Raw Metadata para Civitai
         v_url = f"https://civitai.com/api/v1/model-versions/{version['id']}"
-        v_info = requests.get(v_url, headers=headers, timeout=10).json()
+        v_info = requests.get(v_url, headers=headers, timeout=15).json()
         with open(info_path, 'w', encoding='utf-8') as f: json.dump(v_info, f, indent=4)
         
-        if version.get('images'):
-            img_r = requests.get(version['images'][0]['url'], timeout=10)
-            with open(preview_path, 'wb') as f: f.write(img_r.content)
+        # 2. Metadata Nativa para Forge (ACTIVATION TEXT FIX)
+        trained_words = version.get('trainedWords', [])
+        forge_metadata = {
+            "description": model_data.get('description', ""),
+            "sd version": version.get('baseModel', "Unknown"),
+            "activation text": ", ".join(trained_words),
+            "preferred weight": 1.0,
+            "notes": f"CivitaiFlow Link: https://civitai.com/models/{model_id}"
+        }
+        with open(forge_json_path, 'w', encoding='utf-8') as f: json.dump(forge_metadata, f, indent=4)
 
+        # 3. Preview con Timeout seguro (Evita crasheos por red)
+        try:
+            if version.get('images'):
+                img_r = requests.get(version['images'][0]['url'], timeout=30)
+                with open(preview_path, 'wb') as f: f.write(img_r.content)
+        except Exception as img_e:
+            log.append(f"[WARN] Sin Preview para {clean_name}")
+
+        # 4. Safetensors
         dl_url = f"https://civitai.com/api/download/models/{version['id']}"
         r = requests.get(dl_url + f"?token={api_key}", stream=True, timeout=600)
         
@@ -77,7 +93,7 @@ def process_bulk_download(text_input, threads):
     ids_to_download = parse_civitai_urls(text_input)
     if not ids_to_download: return "⚠️ No se detectaron Links válidos de Civitai."
 
-    final_log = [f"🚀 Iniciando descarga de {len(ids_to_download)} modelos por URL..."]
+    final_log = [f"🚀 Descargando {len(ids_to_download)} modelos por URL..."]
     with ThreadPoolExecutor(max_workers=int(threads)) as executor:
         futures = [executor.submit(download_by_id, m_id, api_key) for m_id in ids_to_download]
         for future in futures: final_log.append(future.result())
@@ -85,16 +101,13 @@ def process_bulk_download(text_input, threads):
 
 def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as civitai_flow_tab:
-        gr.Markdown("## 📡 CivitaiFlow: Hybrid Web-Downloader v6.2")
-        
-        # El Slider inyector de JS (Va fuera de las columnas para controlar todo)
-        ui_scale = gr.Slider(minimum=1, maximum=9, step=1, value=3, label="↔️ Redimensionar Interfaz (Izquierda : Derecha)")
+        gr.Markdown("## 📡 CivitaiFlow: Hybrid Web-Downloader v6.3")
+        ui_scale = gr.Slider(minimum=1, maximum=9, step=1, value=3, label="↔️ Redimensionar Interfaz")
         
         with gr.Row(elem_id="cf_main_row"):
-            # Panel Izquierdo
             with gr.Column(scale=3, elem_id="cf_left_panel"):
                 gr.Markdown("### 1. Panel de Ingesta (Pega los Links aquí)")
-                url_input = gr.Textbox(label="URLs de Civitai (Usa Win + V)", placeholder="Clic derecho -> Copiar enlace...", lines=10)
+                url_input = gr.Textbox(label="URLs de Civitai", placeholder="Pega links encimados, mezclados o separados. El sistema los extraerá.", lines=10)
                 
                 with gr.Row():
                     clear_btn = gr.Button("🗑️ Limpiar Caja", variant="secondary")
@@ -103,11 +116,9 @@ def on_ui_tabs():
                 download_btn = gr.Button("⬇️ Descargar Enlaces", variant="primary", size="lg")
                 status_log = gr.Textbox(label="Consola de Descarga", lines=6)
 
-            # Panel Derecho
             with gr.Column(scale=7, elem_id="cf_right_panel"):
                 gr.HTML('<iframe src="https://civitai.com" style="width: 100%; height: 82vh; border: 2px solid #333; border-radius: 8px;"></iframe>')
 
-        # --- LA MAGIA DE JAVASCRIPT ---
         js_resize = """
         (val) => {
             let left = document.getElementById('cf_left_panel');
@@ -122,7 +133,6 @@ def on_ui_tabs():
         """
         ui_scale.change(fn=None, inputs=[ui_scale], js=js_resize)
 
-        # Eventos normales
         download_btn.click(fn=process_bulk_download, inputs=[url_input, threads_slider], outputs=status_log)
         clear_btn.click(fn=lambda: "", inputs=[], outputs=url_input)
         
