@@ -27,7 +27,7 @@ script_callbacks.on_ui_settings(on_ui_settings)
 def get_windows_clipboard():
     try:
         if not ctypes.windll.user32.OpenClipboard(0): return ""
-        handle = ctypes.windll.user32.GetClipboardData(13) # CF_UNICODETEXT
+        handle = ctypes.windll.user32.GetClipboardData(13)
         if not handle:
             ctypes.windll.user32.CloseClipboard()
             return ""
@@ -78,7 +78,6 @@ def download_by_id(model_id, api_key):
             return
         version = model_data['modelVersions'][0] 
         
-        # Smart File Validator (Para sacar el URL correcto del safetensors)
         files_list = version.get('files', [])
         primary_file = None
         for f in files_list:
@@ -95,10 +94,8 @@ def download_by_id(model_id, api_key):
         download_status[tracker_name] = f"❌ Error API: {str(e)}"
         return
 
-    # TRUE NAMING FIX: Usar el Título Oficial del modelo, no el nombre del archivo
     model_title = model_data.get('name', f"Civitai_Model_{model_id}")
     clean_name = "".join([c for c in model_title if c.isalnum() or c in (' ', '_', '-')]).rstrip()
-    
     category = model_data['tags'][0].replace(' ', '_').replace('/', '_') if model_data.get('tags') else "General"
     
     if tracker_name in download_status: del download_status[tracker_name]
@@ -233,10 +230,12 @@ def on_ui_tabs():
         display: inline-flex !important;
         align-items: center !important;
     }
+    #cf_log_header_row {
+        align-items: center !important;
+    }
     """
     
     with gr.Blocks(analytics_enabled=False, css=mini_btn_css) as civitai_flow_tab:
-        
         poll_btn = gr.Button("poll", visible=False, elem_id="cf_poll_btn")
 
         with gr.Row():
@@ -262,8 +261,9 @@ def on_ui_tabs():
                 
                 gr.Markdown("<br>")
                 
-                with gr.Row(variant="compact"):
-                    gr.Markdown("#### 📊 Monitor de Tráfico (Live)", elem_id="cf_log_header")
+                # BUG FIX: Eliminado el 'variant="compact"' que causaba el crasheo
+                with gr.Row(elem_id="cf_log_header_row"):
+                    gr.Markdown("#### 📊 Monitor de Tráfico")
                     clear_log_btn = gr.Button("Limpiar 🗑️", variant="secondary", elem_id="cf_clear_log_btn")
 
                 status_log = gr.Textbox(label="Status Log Output", show_label=False, lines=12)
