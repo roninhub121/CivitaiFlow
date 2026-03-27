@@ -136,7 +136,6 @@ def process_bulk_download_live(text_input, threads):
         with task_lock:
             active_tasks -= 1
 
-    # AQUÍ ESTÁ EL FIX DEL BUG (Limpia el historial si inicias una sesión nueva)
     with task_lock:
         if active_tasks == 0:
             download_status.clear() 
@@ -171,23 +170,39 @@ def open_lora_folder():
 def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as civitai_flow_tab:
         with gr.Row():
+            
+            # Panel Izquierdo (Rediseñado como Dashboard)
             with gr.Column(scale=1):
-                gr.Markdown("### 1. Lista de Ingesta")
-                url_input = gr.Textbox(label="URLs de Civitai (Copia con clic derecho y pega con Win + V)", placeholder="Puedes agregar más links mientras otras descargas están en curso.", lines=10)
+                gr.Markdown("### 📡 Centro de Mando")
                 
-                with gr.Row():
-                    clear_btn = gr.Button("🗑️ Limpiar Caja", variant="secondary")
-                    folder_btn = gr.Button("📂 Abrir Carpeta LoRAs", variant="secondary")
+                # Grupo visual principal
+                with gr.Group():
+                    url_input = gr.Textbox(
+                        label="📥 Enlaces de Ingesta (Win + V)", 
+                        placeholder="Clic derecho en la foto -> Copiar dirección de enlace...", 
+                        lines=10
+                    )
+                    
+                    with gr.Row():
+                        clear_btn = gr.Button("🗑️ Limpiar", variant="secondary")
+                        folder_btn = gr.Button("📂 Ver LoRAs", variant="secondary")
+                    
+                    download_btn = gr.Button("🚀 Añadir a Cola y Procesar", variant="primary", size="lg")
                 
-                threads_slider = gr.Slider(minimum=1, maximum=10, step=1, label="Descargas Simultáneas", value=5)
-                download_btn = gr.Button("⬇️ Añadir a la Cola / Iniciar", variant="primary", size="lg")
+                # Ajustes secundarios colapsables
+                with gr.Accordion("⚙️ Configuración de Red", open=False):
+                    threads_slider = gr.Slider(minimum=1, maximum=10, step=1, label="Descargas Simultáneas", value=5)
                 
-                gr.Markdown("---")
-                status_log = gr.Textbox(label="Monitor de Tráfico (Live)", lines=12)
+                gr.Markdown("<br>") # Espaciador
+                
+                # Monitor
+                status_log = gr.Textbox(label="📊 Monitor de Tráfico (Live)", lines=12)
 
+            # Panel Derecho (Explorador)
             with gr.Column(scale=6):
                 gr.HTML('<iframe src="https://civitai.com" style="width: 100%; height: 85vh; border: 2px solid #333; border-radius: 8px;"></iframe>')
 
+        # Eventos
         download_btn.click(fn=process_bulk_download_live, inputs=[url_input, threads_slider], outputs=status_log)
         clear_btn.click(fn=lambda: "", inputs=[], outputs=url_input)
         folder_btn.click(fn=open_lora_folder, inputs=[], outputs=[])
