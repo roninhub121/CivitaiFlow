@@ -42,7 +42,7 @@ def get_windows_clipboard():
         return ""
 
 def parse_civitai_urls(text):
-    text = text or ""
+    text = text or "" # FIX: Evita errores si la caja está vacía
     matches = re.findall(r'models/(\d+)', text)
     numbers = re.findall(r'^\d+$', text, re.MULTILINE)
     return list(set(matches + numbers))
@@ -151,11 +151,12 @@ def download_by_id(model_id, api_key):
     except Exception as e:
         download_status[tracker_name] = f"❌ Error Crítico: {str(e)}"
 
-# --- POLLER UNIVERSAL A PRUEBA DE BALAS ---
+# --- POLLER UNIVERSAL ---
 def universal_poller(current_text, is_sniper_on, is_auto_dl_on, threads):
     global last_copied_url, active_tasks, download_status, task_lock
     api_key = shared.opts.data.get("civitai_api_key", "")
-    current_text = current_text or "" 
+    current_text = current_text or "" # FIX: Nunca será nulo
+    
     text_update = gr.update()
     log_update = gr.update()
     
@@ -189,12 +190,11 @@ def universal_poller(current_text, is_sniper_on, is_auto_dl_on, threads):
         for name, status in download_status.items():
             log_lines.append(f"📦 {name}\n   └─ {status}\n")
         log_update = "\n".join(log_lines)
-    else:
-        if len(download_status) > 0:
-            log_lines = ["🚀 TODAS LAS TAREAS FINALIZADAS\n" + "="*30]
-            for name, status in download_status.items():
-                log_lines.append(f"📦 {name}\n   └─ {status}\n")
-            log_update = "\n".join(log_lines)
+    elif len(download_status) > 0:
+        log_lines = ["🚀 TODAS LAS TAREAS FINALIZADAS\n" + "="*30]
+        for name, status in download_status.items():
+            log_lines.append(f"📦 {name}\n   └─ {status}\n")
+        log_update = "\n".join(log_lines)
 
     return text_update, log_update
 
@@ -263,7 +263,6 @@ def on_ui_tabs():
     
     with gr.Blocks(analytics_enabled=False, css=custom_css) as civitai_flow_tab:
         
-        # Botón ninja anclado y totalmente invisible
         poll_btn = gr.Button("poll", elem_id="cf_poll_btn")
 
         with gr.Row():
@@ -277,7 +276,7 @@ def on_ui_tabs():
                         
                     url_input = gr.Textbox(
                         label="📥 Enlaces de Ingesta", 
-                        placeholder="Copia enlaces web y se pegarán aquí solos con el Sniper...", 
+                        placeholder="Activa el Modo Sniper, haz clic derecho -> copiar enlace, y mira cómo aparecen solos aquí...", 
                         lines=10
                     )
                     
@@ -309,19 +308,25 @@ def on_ui_tabs():
         folder_btn.click(fn=open_lora_folder, inputs=[], outputs=[])
         clear_log_btn.click(fn=clear_log_dashboard, inputs=[], outputs=status_log)
         
-        # Inyección super segura: corre siempre, pero Python decide si hace caso o no.
-        js_onload = """
-        () => {
-            if (!window.cf_poller_active) {
-                window.cf_poller_active = true;
-                setInterval(() => {
-                    let btn = document.getElementById('cf_poll_btn');
-                    if (btn) btn.click();
-                }, 1500); 
+        # FIX: Gradio 4 Odia .load() - El JS se activa desde la Checkbox
+        js_sniper = """
+        (enabled) => {
+            if (enabled) {
+                if (!window.cf_sniper_interval) {
+                    window.cf_sniper_interval = setInterval(() => {
+                        let btn = document.getElementById('cf_poll_btn');
+                        if (btn) btn.click();
+                    }, 1500);
+                }
+            } else {
+                if (window.cf_sniper_interval) {
+                    clearInterval(window.cf_sniper_interval);
+                    window.cf_sniper_interval = null;
+                }
             }
         }
         """
-        civitai_flow_tab.load(fn=None, inputs=[], outputs=[], _js=js_onload)
+        sniper_mode.change(fn=None, inputs=[sniper_mode], outputs=[], js=js_sniper)
         
     return [(civitai_flow_tab, "CivitaiFlow", "civitai_flow_tab")]
 
