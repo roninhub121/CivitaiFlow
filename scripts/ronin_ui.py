@@ -78,8 +78,28 @@ def download_by_id(model_id, api_key):
         return
 
     try:
-        forge_json = {"description": model_data.get('description', ""), "sd version": version.get('baseModel', "Unknown"), "activation text": ", ".join(version.get('trainedWords', [])), "preferred weight": 1.0}
+        # Limpieza de HTML en la descripción para que Forge no muestre tags feos
+        raw_desc = model_data.get('description', "") or ""
+        clean_desc = re.sub(r'<[^>]+>', '', raw_desc).strip()
+        
+        forge_json = {
+            "description": clean_desc, 
+            "sd version": version.get('baseModel', "Unknown"), 
+            "activation text": ", ".join(version.get('trainedWords', [])), 
+            "preferred weight": 1.0
+        }
         with open(os.path.join(target_dir, f"{clean_name}.json"), 'w', encoding='utf-8') as f: json.dump(forge_json, f, indent=4)
+        
+        # Descarga de imagen en formato puro .png para Forge
+        if version.get('images'):
+            try:
+                img_url = version['images'][0]['url']
+                img_r = requests.get(img_url, timeout=15)
+                if img_r.status_code == 200:
+                    with open(os.path.join(target_dir, f"{clean_name}.png"), 'wb') as f: 
+                        f.write(img_r.content)
+            except: pass
+
         r = requests.get(download_url, headers=headers, stream=True, timeout=600)
         if r.status_code == 200:
             total_size = int(r.headers.get('content-length', 0))
