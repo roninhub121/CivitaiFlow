@@ -12,14 +12,14 @@ from concurrent.futures import ThreadPoolExecutor
 
 LORA_DIR = os.path.join(paths.models_path, "Lora")
 
-# --- ESTADO GLOBAL ---
+# --- GLOBAL STATE ---
 DOWNLOAD_STATUS = {}
 EXPIRATION_REGISTRY = {}
 ACTIVE_TASKS = 0
 TASK_LOCK = threading.Lock()
 LAST_CLIPBOARD = ""
 PROCESSED_IDS = set()
-FAILED_IDS = set() # Track de errores para reintento
+FAILED_IDS = set()
 
 def on_ui_settings():
     section = ('civitai_flow', "CivitaiFlow Manager")
@@ -46,12 +46,12 @@ def parse_civitai_urls(text):
 def download_by_id(model_id, api_key):
     global DOWNLOAD_STATUS, FAILED_IDS
     tracker_name = f"ID: {model_id}"
-    DOWNLOAD_STATUS[tracker_name] = "🔄 Conectando..."
+    DOWNLOAD_STATUS[tracker_name] = "🔄 Connecting..."
     headers = {"Authorization": f"Bearer {api_key}", "User-Agent": "Mozilla/5.0"}
     try:
         r = requests.get(f"https://civitai.com/api/v1/models/{model_id}", headers=headers, timeout=15)
         if r.status_code != 200:
-            DOWNLOAD_STATUS[tracker_name] = f"❌ Error API: {r.status_code}"
+            DOWNLOAD_STATUS[tracker_name] = f"❌ API Error: {r.status_code}"
             FAILED_IDS.add(model_id)
             return
         model_data = r.json()
@@ -73,7 +73,7 @@ def download_by_id(model_id, api_key):
     safetensors_path = os.path.join(target_dir, f"{clean_name}.safetensors")
     
     if os.path.exists(safetensors_path): 
-        DOWNLOAD_STATUS[tracker_name] = "⏭️ Ya existe"
+        DOWNLOAD_STATUS[tracker_name] = "⏭️ Already exists"
         if model_id in FAILED_IDS: FAILED_IDS.remove(model_id)
         return
 
@@ -107,7 +107,6 @@ def master_tick(current_text, is_sniper, is_auto, threads):
     current_text = current_text or ""
     text_update = gr.update()
     
-    # 1. Sniper
     if is_sniper:
         clip = get_windows_clipboard()
         if clip and "civitai.com/models/" in clip and clip != LAST_CLIPBOARD:
@@ -116,7 +115,6 @@ def master_tick(current_text, is_sniper, is_auto, threads):
                 current_text = current_text.strip() + "\n" + clip if current_text.strip() else clip
                 text_update = current_text
 
-    # 2. Auto-DL
     if is_auto:
         all_ids = parse_civitai_urls(current_text)
         new_ids = [m_id for m_id in all_ids if m_id not in PROCESSED_IDS]
@@ -134,13 +132,12 @@ def master_tick(current_text, is_sniper, is_auto, threads):
             threading.Thread(target=run_queue, args=(new_ids,), daemon=True).start()
             text_update = "" 
 
-    # 3. TTL Diferenciado (Éxito 8s vs Error 60s)
     now = time.time()
     for name, status in list(DOWNLOAD_STATUS.items()):
         is_error = "❌" in status
         ttl = 60 if is_error else 8
         
-        if "✅ OK" in status or "⏭️ Ya existe" in status or is_error:
+        if "✅ OK" in status or "⏭️ Already exists" in status or is_error:
             if name not in EXPIRATION_REGISTRY: EXPIRATION_REGISTRY[name] = now
             elif now - EXPIRATION_REGISTRY[name] > ttl:
                 del DOWNLOAD_STATUS[name]
@@ -148,21 +145,21 @@ def master_tick(current_text, is_sniper, is_auto, threads):
 
     if ACTIVE_TASKS > 0 or DOWNLOAD_STATUS:
         log_out = []
-        if ACTIVE_TASKS > 0: log_out.append(f"📊 DESCARGAS ACTIVAS: {ACTIVE_TASKS}\n" + "-"*25)
+        if ACTIVE_TASKS > 0: log_out.append(f"📊 ACTIVE DOWNLOADS: {ACTIVE_TASKS}\n" + "-"*25)
         log_out.extend([f"📦 {n[:32]}\n  └ {s}\n" for n, s in DOWNLOAD_STATUS.items()])
         return text_update, "\n".join(log_out)
-    return text_update, "😴 Sistema en espera..."
+    return text_update, "😴 System on standby... Copy a Civitai link to wake up."
 
 def retry_failed(threads):
     global FAILED_IDS, PROCESSED_IDS, ACTIVE_TASKS, DOWNLOAD_STATUS
     api_key = shared.opts.data.get("civitai_api_key", "")
-    if not FAILED_IDS: return "No hay errores que reintentar."
+    if not FAILED_IDS: return "No failed downloads to retry."
     
     with TASK_LOCK:
         to_retry = list(FAILED_IDS)
         ACTIVE_TASKS += len(to_retry)
         for m_id in to_retry:
-            if m_id in PROCESSED_IDS: PROCESSED_IDS.remove(m_id) # Permitir re-procesar
+            if m_id in PROCESSED_IDS: PROCESSED_IDS.remove(m_id)
         DOWNLOAD_STATUS.clear()
         
     def run_queue(ids):
@@ -173,7 +170,7 @@ def retry_failed(threads):
                     global ACTIVE_TASKS
                     ACTIVE_TASKS -= 1
     threading.Thread(target=run_queue, args=(to_retry,), daemon=True).start()
-    return "🔄 Reintentando descargas fallidas..."
+    return "🔄 Retrying failed downloads..."
 
 def reset_all():
     global DOWNLOAD_STATUS, PROCESSED_IDS, LAST_CLIPBOARD, EXPIRATION_REGISTRY, FAILED_IDS
@@ -183,7 +180,7 @@ def reset_all():
         EXPIRATION_REGISTRY.clear()
         FAILED_IDS.clear()
         LAST_CLIPBOARD = ""
-    return "", "Monitor limpio."
+    return "", "Monitor cleared."
 
 def open_loras():
     os.makedirs(LORA_DIR, exist_ok=True)
@@ -197,21 +194,21 @@ def on_ui_tabs():
                 gr.Markdown("### 📡 CivitaiFlow v21 (Resilience)")
                 with gr.Group():
                     with gr.Row():
-                        sniper = gr.Checkbox(label="🎯 Sniper", value=True)
-                        auto = gr.Checkbox(label="⚡ Auto-DL", value=True)
-                    url_box = gr.Textbox(label="📥 Puente de Ingesta", lines=1, placeholder="Sniper ON")
-                    btn_folder = gr.Button("📂 Abrir Carpeta LoRAs", variant="secondary")
+                        sniper = gr.Checkbox(label="🎯 Sniper Mode", value=True)
+                        auto = gr.Checkbox(label="⚡ Auto-Download", value=True)
+                    url_box = gr.Textbox(label="📥 Ingestion Bridge", lines=1, placeholder="Sniper ON - Ready")
+                    btn_folder = gr.Button("📂 Open LoRAs Folder", variant="secondary")
                 
-                with gr.Accordion("⚙️ Red", open=False):
-                    th_slider = gr.Slider(1, 10, 5, step=1, label="Hilos")
+                with gr.Accordion("⚙️ Network Settings", open=False):
+                    th_slider = gr.Slider(1, 10, 5, step=1, label="Concurrent Threads")
                 
                 gr.Markdown("<br>")
                 with gr.Row():
-                    gr.Markdown("#### 📊 Monitor de Tráfico")
-                    btn_clear = gr.Button("🗑️ Limpiar", variant="secondary", size="sm")
+                    gr.Markdown("#### 📊 Traffic Monitor")
+                    btn_clear = gr.Button("🗑️ Clear", variant="secondary", size="sm")
                 
-                btn_retry = gr.Button("🔄 REINTENTAR ERRORES", variant="primary")
-                log_box = gr.Textbox(label="Telemetría", show_label=False, lines=25, interactive=False)
+                btn_retry = gr.Button("🔄 RETRY FAILED", variant="primary")
+                log_box = gr.Textbox(label="Telemetry", show_label=False, lines=25, interactive=False)
 
             with gr.Column(scale=6):
                 gr.HTML('<iframe src="https://civitai.com" style="width: 100%; height: 90vh; border: 2px solid #222; border-radius: 12px;"></iframe>')
