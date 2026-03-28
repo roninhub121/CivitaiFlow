@@ -145,15 +145,15 @@ def master_tick(current_text, is_sniper, is_auto, threads):
 
     if ACTIVE_TASKS > 0 or DOWNLOAD_STATUS:
         log_out = []
-        if ACTIVE_TASKS > 0: log_out.append(f"📊 ACTIVE DOWNLOADS: {ACTIVE_TASKS}\n" + "-"*25)
-        log_out.extend([f"📦 {n[:32]}\n  └ {s}\n" for n, s in DOWNLOAD_STATUS.items()])
+        if ACTIVE_TASKS > 0: log_out.append(f"📊 ACTIVE DOWNLOADS: {ACTIVE_TASKS}\n" + "-"*30)
+        log_out.extend([f"📦 {n[:35]}\n  └ {s}\n" for n, s in DOWNLOAD_STATUS.items()])
         return text_update, "\n".join(log_out)
     return text_update, "😴 System on standby... Copy a Civitai link to wake up."
 
 def retry_failed(threads):
     global FAILED_IDS, PROCESSED_IDS, ACTIVE_TASKS, DOWNLOAD_STATUS
     api_key = shared.opts.data.get("civitai_api_key", "")
-    if not FAILED_IDS: return "No failed downloads to retry."
+    if not FAILED_IDS: return "✅ No failed downloads to retry."
     
     with TASK_LOCK:
         to_retry = list(FAILED_IDS)
@@ -180,43 +180,84 @@ def reset_all():
         EXPIRATION_REGISTRY.clear()
         FAILED_IDS.clear()
         LAST_CLIPBOARD = ""
-    return "", "Monitor cleared."
+    return "", "🗑️ Monitor cleared."
 
 def open_loras():
     os.makedirs(LORA_DIR, exist_ok=True)
     os.startfile(LORA_DIR)
 
 def on_ui_tabs():
-    with gr.Blocks(analytics_enabled=False) as cf_tab:
+    custom_css = """
+    /* Modern Dashboard Styling */
+    #cf_terminal textarea {
+        background-color: #0d1117 !important;
+        color: #58a6ff !important;
+        font-family: 'Consolas', 'Courier New', monospace !important;
+        border-radius: 8px !important;
+        border: 1px solid #30363d !important;
+        box-shadow: inset 0 0 10px rgba(0,0,0,0.5);
+    }
+    #cf_dropzone textarea {
+        background-color: transparent !important;
+        border: 2px dashed #4b5563 !important;
+        border-radius: 8px !important;
+        text-align: center;
+    }
+    #cf_clear_btn {
+        min-width: auto !important;
+        padding: 0px 10px !important;
+    }
+    """
+    
+    with gr.Blocks(analytics_enabled=False, css=custom_css) as cf_tab:
         timer = gr.Timer(1.5)
+        
         with gr.Row():
             with gr.Column(scale=1):
-                gr.Markdown("### 📡 CivitaiFlow v21 (Resilience)")
-                with gr.Group():
-                    with gr.Row():
-                        sniper = gr.Checkbox(label="🎯 Sniper Mode", value=True)
-                        auto = gr.Checkbox(label="⚡ Auto-Download", value=True)
-                    url_box = gr.Textbox(label="📥 Ingestion Bridge", lines=1, placeholder="Sniper ON - Ready")
-                    btn_folder = gr.Button("📂 Open LoRAs Folder", variant="secondary")
+                gr.Markdown("## 📡 CivitaiFlow Dashboard")
                 
-                with gr.Accordion("⚙️ Network Settings", open=False):
+                with gr.Group():
+                    with gr.Row(variant="panel"):
+                        sniper = gr.Checkbox(label="🎯 Sniper Mode", value=True)
+                        auto = gr.Checkbox(label="⚡ Auto-DL", value=True)
+                    
+                    url_box = gr.Textbox(
+                        label="", 
+                        lines=2, 
+                        placeholder="📥 Links drop zone (Sniper Active)", 
+                        elem_id="cf_dropzone",
+                        show_label=False
+                    )
+                    
+                    btn_folder = gr.Button("📂 Open LoRAs Directory", variant="secondary")
+                
+                with gr.Accordion("⚙️ Advanced Settings", open=False):
                     th_slider = gr.Slider(1, 10, 5, step=1, label="Concurrent Threads")
                 
                 gr.Markdown("<br>")
+                
                 with gr.Row():
-                    gr.Markdown("#### 📊 Traffic Monitor")
-                    btn_clear = gr.Button("🗑️ Clear", variant="secondary", size="sm")
+                    gr.Markdown("### 📊 Live Telemetry")
+                    btn_clear = gr.Button("🗑️ Clear Log", variant="secondary", elem_id="cf_clear_btn")
                 
                 btn_retry = gr.Button("🔄 RETRY FAILED", variant="primary")
-                log_box = gr.Textbox(label="Telemetry", show_label=False, lines=25, interactive=False)
+                
+                log_box = gr.Textbox(
+                    label="", 
+                    show_label=False, 
+                    lines=24, 
+                    interactive=False, 
+                    elem_id="cf_terminal"
+                )
 
-            with gr.Column(scale=6):
-                gr.HTML('<iframe src="https://civitai.com" style="width: 100%; height: 90vh; border: 2px solid #222; border-radius: 12px;"></iframe>')
+            with gr.Column(scale=5):
+                gr.HTML('<iframe src="https://civitai.com" style="width: 100%; height: 92vh; border: 1px solid #30363d; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.3);"></iframe>')
 
         timer.tick(fn=master_tick, inputs=[url_box, sniper, auto, th_slider], outputs=[url_box, log_box])
         btn_clear.click(fn=reset_all, outputs=[url_box, log_box])
         btn_retry.click(fn=retry_failed, inputs=[th_slider], outputs=[log_box])
         btn_folder.click(fn=open_loras)
+        
     return [(cf_tab, "CivitaiFlow", "cf_tab")]
 
 script_callbacks.on_ui_tabs(on_ui_tabs)
