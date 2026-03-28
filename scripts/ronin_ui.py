@@ -18,20 +18,26 @@ active_tasks = 0
 task_lock = threading.Lock()
 last_copied_url = ""
 last_log_text = ""
+SNIPER_ACTIVE = False
 
 def on_ui_settings():
     section = ('civitai_flow', "CivitaiFlow Manager")
     shared.opts.add_option("civitai_api_key", shared.OptionInfo("", "Civitai API Key (Ronin Edition)", gr.Textbox, {"visible": True}, section=section))
 script_callbacks.on_ui_settings(on_ui_settings)
 
-# --- HOOK NATIVO DE WINDOWS (SEGURO) ---
+# --- HOOK NATIVO DE WINDOWS (FORTIFICADO) ---
 def get_windows_clipboard():
     try:
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32
         
-        if not user32.OpenClipboard(0): return ""
-        
+        # Reintentos por si Windows tiene el portapapeles bloqueado 1 milisegundo
+        for _ in range(3):
+            if user32.OpenClipboard(0): break
+            time.sleep(0.1)
+        else:
+            return ""
+            
         handle = user32.GetClipboardData(13) 
         if not handle:
             user32.CloseClipboard()
@@ -43,7 +49,6 @@ def get_windows_clipboard():
             return ""
             
         data = ctypes.c_wchar_p(pcontents).value
-        
         kernel32.GlobalUnlock(handle)
         user32.CloseClipboard()
         return data or ""
@@ -130,23 +135,37 @@ def download_by_id(model_id, api_key):
         else: download_status[tracker_name] = f"❌ Error HTTP {r.status_code}"
     except Exception as e: download_status[tracker_name] = f"❌ Error Crítico: {str(e)}"
 
-# --- MOTOR DE POLLING NATIVO (CRON JOB) ---
-def universal_poller(current_text, is_sniper, is_auto, threads):
-    global last_copied_url, active_tasks, download_status, task_lock, last_log_text
+
+# --- GENERADOR DE SNIPER (Nativo Gradio) ---
+def toggle_sniper(is_on, is_auto, current_text, threads):
+    global SNIPER_ACTIVE, last_copied_url, active_tasks, download_status, task_lock, last_log_text
     api_key = shared.opts.data.get("civitai_api_key", "")
     current_text = current_text or ""
     
-    text_out = gr.update()
-    log_out = gr.update()
+    # Apagado Maestro
+    SNIPER_ACTIVE = is_on
+    if not is_on:
+        yield current_text, "🎯 Modo Sniper [Desactivado]"
+        return
+        
+    yield current_text, "🎯 Modo Sniper [ON] - Escuchando portapapeles..."
     
-    # 1. Sniper Automático
-    if is_sniper:
+    # Bucle infinito manejado por Python que hace streaming al frontend
+    while SNIPER_ACTIVE:
+        time.sleep(1.0) # Escanea cada 1 segundo
+        has_changes = False
+        text_out = current_text
+        log_out = last_log_text
+        
+        # 1. Leer Portapapeles
         clip = get_windows_clipboard()
         if clip and isinstance(clip, str) and clip != last_copied_url and "civitai.com/models/" in clip:
             last_copied_url = clip
             current_text = current_text.strip() + "\n" + clip if current_text.strip() else clip
-            text_out = current_text # Manda el texto actualizado a la caja
+            text_out = current_text
+            has_changes = True
             
+            # Auto-Descarga
             if is_auto:
                 ids = parse_civitai_urls(clip)
                 if ids:
@@ -161,34 +180,43 @@ def universal_poller(current_text, is_sniper, is_auto, threads):
                                     global active_tasks
                                     active_tasks -= 1
                     threading.Thread(target=run_dl, args=(ids,), daemon=True).start()
-                        
-    # 2. Refresco de Consola (Solo actualiza si hay cambios para no trabar la UI)
-    new_log = ""
-    if active_tasks > 0:
-        log_lines = [f"📊 TAREAS EN COLA: {active_tasks}\n" + "-"*30]
-        log_lines.extend([f"📦 {n}\n   └─ {s}\n" for n, s in download_status.items()])
-        new_log = "\n".join(log_lines)
-    elif len(download_status) > 0:
-        log_lines = ["🚀 TODAS LAS RÁFAGAS FINALIZADAS\n" + "="*30]
-        log_lines.extend([f"📦 {n}\n   └─ {s}\n" for n, s in download_status.items()])
-        new_log = "\n".join(log_lines)
-        
-    if new_log != last_log_text:
-        last_log_text = new_log
-        log_out = new_log
-        
-    return text_out, log_out
 
+        # 2. Refresco de Consola
+        new_log = ""
+        if active_tasks > 0:
+            log_lines = [f"📊 TAREAS EN COLA: {active_tasks}\n" + "-"*30]
+            log_lines.extend([f"📦 {n}\n   └─ {s}\n" for n, s in download_status.items()])
+            new_log = "\n".join(log_lines)
+        elif len(download_status) > 0:
+            log_lines = ["🚀 TODAS LAS RÁFAGAS FINALIZADAS\n" + "="*30]
+            log_lines.extend([f"📦 {n}\n   └─ {s}\n" for n, s in download_status.items()])
+            new_log = "\n".join(log_lines)
+        else:
+            new_log = "🎯 Modo Sniper [ON] - Esperando que copies un enlace..."
+            
+        if new_log != last_log_text:
+            last_log_text = new_log
+            log_out = new_log
+            has_changes = True
+            
+        # Solo actualiza la UI si hubo movimiento (Optimización)
+        if has_changes:
+            yield text_out, log_out
+
+
+# --- GENERADOR DE DESCARGA MANUAL ---
 def manual_download_trigger(text_input, threads):
-    global download_status, active_tasks, task_lock
+    global download_status, active_tasks, task_lock, SNIPER_ACTIVE
     api_key = shared.opts.data.get("civitai_api_key", "")
     if not api_key: 
-        download_status["API_KEY"] = "❌ Error: Configura tu API Key."
-        return gr.update()
+        yield "❌ Error: Configura tu API Key en la pestaña Settings."
+        return
     
     text_input = text_input or ""
     ids_to_download = parse_civitai_urls(text_input)
-    if not ids_to_download: return gr.update()
+    if not ids_to_download: 
+        yield "⚠️ No se detectaron Links válidos."
+        return
 
     with task_lock:
         if active_tasks == 0: download_status.clear() 
@@ -203,7 +231,23 @@ def manual_download_trigger(text_input, threads):
                     active_tasks -= 1
                     
     threading.Thread(target=run_downloads, args=(ids_to_download,), daemon=True).start()
-    return gr.update()
+    
+    # Si el Sniper está encendido, él mismo dibujará el log en la UI.
+    if SNIPER_ACTIVE:
+        yield "🚀 Descargas agregadas a la cola. El Sniper está actualizando el status..."
+        return
+        
+    # Si está apagado, este generador dibuja la UI.
+    while active_tasks > 0:
+        time.sleep(1)
+        log_lines = [f"📊 TAREAS EN COLA: {active_tasks}\n" + "-"*30]
+        log_lines.extend([f"📦 {n}\n   └─ {s}\n" for n, s in download_status.items()])
+        yield "\n".join(log_lines)
+        
+    log_lines = ["🚀 TODAS LAS RÁFAGAS FINALIZADAS\n" + "="*30]
+    log_lines.extend([f"📦 {n}\n   └─ {s}\n" for n, s in download_status.items()])
+    yield "\n".join(log_lines)
+
 
 def clear_log_dashboard():
     global download_status, last_log_text
@@ -211,6 +255,7 @@ def clear_log_dashboard():
         if active_tasks == 0: 
             download_status.clear()
             last_log_text = ""
+    return gr.update()
 
 def open_lora_folder():
     os.makedirs(LORA_DIR, exist_ok=True)
@@ -224,9 +269,6 @@ def on_ui_tabs():
     """
     
     with gr.Blocks(analytics_enabled=False, css=custom_css) as civitai_flow_tab:
-        
-        # CRON JOB NATIVO: Ejecuta el poller cada 1.5 segundos en background sin JS
-        poller_timer = gr.Timer(1.5, active=True)
 
         with gr.Row():
             with gr.Column(scale=1):
@@ -235,7 +277,7 @@ def on_ui_tabs():
                     with gr.Row():
                         sniper_mode = gr.Checkbox(label="🎯 Modo Sniper", value=False)
                         auto_dl_mode = gr.Checkbox(label="⚡ Auto-Descargar", value=False)
-                    url_input = gr.Textbox(label="📥 Enlaces de Ingesta", placeholder="Activa Sniper y Auto-Descargar. Navega, copia un enlace y observa...", lines=10)
+                    url_input = gr.Textbox(label="📥 Enlaces de Ingesta", placeholder="Activa el Sniper y observa cómo se pegan los enlaces solos...", lines=10)
                     with gr.Row():
                         clear_btn = gr.Button("🗑️ Limpiar Caja", variant="secondary")
                         folder_btn = gr.Button("📂 Ver LoRAs", variant="secondary")
@@ -253,13 +295,13 @@ def on_ui_tabs():
             with gr.Column(scale=6):
                 gr.HTML('<iframe src="https://civitai.com" style="width: 100%; height: 85vh; border: 2px solid #333; border-radius: 8px;"></iframe>')
 
-        # --- EVENTOS DE CONEXIÓN ---
-        poller_timer.tick(fn=universal_poller, inputs=[url_input, sniper_mode, auto_dl_mode, threads_slider], outputs=[url_input, status_log])
+        # --- EVENTOS GENERADORES ---
+        sniper_mode.change(fn=toggle_sniper, inputs=[sniper_mode, auto_dl_mode, url_input, threads_slider], outputs=[url_input, status_log])
+        download_btn.click(fn=manual_download_trigger, inputs=[url_input, threads_slider], outputs=status_log)
         
-        download_btn.click(fn=manual_download_trigger, inputs=[url_input, threads_slider], outputs=[])
         clear_btn.click(fn=lambda: "", inputs=[], outputs=url_input)
         folder_btn.click(fn=open_lora_folder, inputs=[], outputs=[])
-        clear_log_btn.click(fn=clear_log_dashboard, inputs=[], outputs=[])
+        clear_log_btn.click(fn=clear_log_dashboard, inputs=[], outputs=status_log)
         
     return [(civitai_flow_tab, "CivitaiFlow", "civitai_flow_tab")]
 
