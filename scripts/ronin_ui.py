@@ -18,24 +18,21 @@ ACTIVE_TASKS = 0
 TASK_LOCK = threading.Lock()
 LAST_CLIPBOARD = ""
 PROCESSED_IDS = set()
+LAST_FINISH_TIME = 0  # Para la auto-limpieza
 
 def on_ui_settings():
     section = ('civitai_flow', "CivitaiFlow Manager")
     shared.opts.add_option("civitai_api_key", shared.OptionInfo("", "Civitai API Key (Ronin Edition)", gr.Textbox, {"visible": True}, section=section))
 script_callbacks.on_ui_settings(on_ui_settings)
 
-# --- HOOK DE PORTAPAPELES (FILTRADO) ---
 def get_windows_clipboard():
     try:
-        # Forzamos a PowerShell a usar UTF8 y no Profile para máxima velocidad
         clip_bytes = subprocess.check_output(
             ['powershell', '-NoProfile', '-Command', '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-Clipboard'],
             creationflags=0x08000000, 
             timeout=2
         )
         text = clip_bytes.decode('utf-8', errors='ignore').strip()
-        
-        # SEGURIDAD: Si el texto es muy largo (>300) o contiene keywords de código, lo ignoramos
         if len(text) > 300 or "$uiCode" in text or "import os" in text:
             return ""
         return text
@@ -48,7 +45,6 @@ def parse_civitai_urls(text):
     numbers = re.findall(r'^\d+$', text, re.MULTILINE)
     return list(set(matches + numbers))
 
-# --- MOTOR DE DESCARGA ---
 def download_by_id(model_id, api_key):
     global DOWNLOAD_STATUS
     tracker_name = f"ID: {model_id}"
@@ -85,7 +81,6 @@ def download_by_id(model_id, api_key):
         return
 
     try:
-        # Guardar JSON de Forge
         forge_json = {"description": model_data.get('description', ""), "sd version": version.get('baseModel', "Unknown"), "activation text": ", ".join(version.get('trainedWords', [])), "preferred weight": 1.0}
         with open(os.path.join(target_dir, f"{clean_name}.json"), 'w', encoding='utf-8') as f: json.dump(forge_json, f, indent=4)
 
@@ -105,14 +100,13 @@ def download_by_id(model_id, api_key):
         else: DOWNLOAD_STATUS[tracker_name] = f"❌ HTTP {r.status_code}"
     except Exception as e: DOWNLOAD_STATUS[tracker_name] = f"❌ Error: {str(e)[:20]}"
 
-# --- POLLER MAESTRO ---
 def master_tick(current_text, is_sniper, is_auto, threads):
-    global LAST_CLIPBOARD, ACTIVE_TASKS, DOWNLOAD_STATUS, TASK_LOCK, PROCESSED_IDS
+    global LAST_CLIPBOARD, ACTIVE_TASKS, DOWNLOAD_STATUS, TASK_LOCK, PROCESSED_IDS, LAST_FINISH_TIME
     api_key = shared.opts.data.get("civitai_api_key", "")
     current_text = current_text or ""
     text_update = gr.update()
     
-    # 1. Sniper (Captura)
+    # 1. Sniper
     if is_sniper:
         clip = get_windows_clipboard()
         if clip and "civitai.com/models/" in clip and clip != LAST_CLIPBOARD:
@@ -121,7 +115,7 @@ def master_tick(current_text, is_sniper, is_auto, threads):
                 current_text = current_text.strip() + "\n" + clip if current_text.strip() else clip
                 text_update = current_text
 
-    # 2. Monitor de Autodescarga (Para Sniper y Manual)
+    # 2. Auto-descarga
     if is_auto:
         all_ids = parse_civitai_urls(current_text)
         new_ids = [m_id for m_id in all_ids if m_id not in PROCESSED_IDS]
@@ -129,6 +123,7 @@ def master_tick(current_text, is_sniper, is_auto, threads):
             with TASK_LOCK:
                 if ACTIVE_TASKS == 0: DOWNLOAD_STATUS.clear()
                 ACTIVE_TASKS += len(new_ids)
+                LAST_FINISH_TIME = 0
                 for m_id in new_ids: PROCESSED_IDS.add(m_id)
             
             def run_queue(ids):
@@ -140,61 +135,77 @@ def master_tick(current_text, is_sniper, is_auto, threads):
                             ACTIVE_TASKS -= 1
             threading.Thread(target=run_queue, args=(new_ids,), daemon=True).start()
 
-    # 3. Status Output
+    # 3. Lógica de Limpieza de Log (Auto-clear tras 15 seg)
     if ACTIVE_TASKS > 0:
-        log_out = [f"📊 COLA: {ACTIVE_TASKS}\n" + "-"*20]
-        log_out.extend([f"📦 {n[:30]}\n  └ {s}\n" for n, s in DOWNLOAD_STATUS.items()])
+        LAST_FINISH_TIME = 0
+    elif DOWNLOAD_STATUS and LAST_FINISH_TIME == 0:
+        LAST_FINISH_TIME = time.time()
+    elif DOWNLOAD_STATUS and LAST_FINISH_TIME > 0:
+        if (time.time() - LAST_FINISH_TIME) > 15:
+            DOWNLOAD_STATUS.clear()
+            LAST_FINISH_TIME = 0
+            return text_update, ""
+
+    if ACTIVE_TASKS > 0:
+        log_out = [f"📊 COLA ACTIVA: {ACTIVE_TASKS}\n" + "-"*25]
+        log_out.extend([f"📦 {n[:28]}\n  └ {s}\n" for n, s in DOWNLOAD_STATUS.items()])
         return text_update, "\n".join(log_out)
     elif DOWNLOAD_STATUS:
-        log_out = ["🚀 FINALIZADO\n" + "="*20]
-        log_out.extend([f"📦 {n[:30]}\n  └ {s}\n" for n, s in DOWNLOAD_STATUS.items()])
+        log_out = ["🚀 TAREAS FINALIZADAS (Limpieza en 15s)\n" + "="*25]
+        log_out.extend([f"📦 {n[:28]}\n  └ {s}\n" for n, s in DOWNLOAD_STATUS.items()])
         return text_update, "\n".join(log_out)
     
-    return text_update, "Esperando..."
+    return text_update, ""
 
 def clear_all():
     global DOWNLOAD_STATUS, PROCESSED_IDS, LAST_CLIPBOARD
     with TASK_LOCK:
-        if ACTIVE_TASKS == 0:
-            DOWNLOAD_STATUS.clear()
-            PROCESSED_IDS.clear()
-            LAST_CLIPBOARD = ""
-    return "", "Cajas limpias."
+        DOWNLOAD_STATUS.clear()
+        PROCESSED_IDS.clear()
+        LAST_CLIPBOARD = ""
+    return "", ""
 
 def open_loras():
     os.makedirs(LORA_DIR, exist_ok=True)
     os.startfile(LORA_DIR)
 
-# --- UI ---
 def on_ui_tabs():
     with gr.Blocks(analytics_enabled=False) as cf_tab:
-        # Timer invisible de 1.5s (seguro para Forge)
         timer = gr.Timer(1.5)
         
         with gr.Row():
+            # PANEL IZQUIERDO RE-ESTRUCTURADO
             with gr.Column(scale=1):
-                gr.Markdown("### 📡 CivitaiFlow v16")
+                gr.Markdown("### 📡 CivitaiFlow v17")
+                
                 with gr.Group():
+                    # Agrupación de controles de proceso
                     with gr.Row():
                         sniper = gr.Checkbox(label="🎯 Sniper", value=False)
-                        auto = gr.Checkbox(label="⚡ Auto-Descarga", value=False)
-                    url_box = gr.Textbox(label="📥 Enlaces", lines=8)
+                        auto = gr.Checkbox(label="⚡ Auto-DL", value=False)
+                    
+                    url_box = gr.Textbox(label="📥 Enlaces de Ingesta", lines=5, placeholder="Copia links y mira aquí...")
+                    
                     with gr.Row():
-                        btn_clear = gr.Button("🗑️ Limpiar")
-                        btn_folder = gr.Button("📂 Abrir")
-                    btn_manual = gr.Button("🚀 Procesar Manual", variant="primary")
+                        btn_clear = gr.Button("🗑️ Limpiar", variant="secondary")
+                        btn_folder = gr.Button("📂 Abrir", variant="secondary")
+                    
+                    btn_manual = gr.Button("🚀 PROCESAR AHORA", variant="primary")
                 
-                with gr.Accordion("⚙️ Red", open=False):
-                    th_slider = gr.Slider(1, 10, 5, step=1, label="Hilos")
+                with gr.Accordion("⚙️ Configuración de Red", open=False):
+                    th_slider = gr.Slider(1, 10, 5, step=1, label="Descargas Simultáneas")
                 
-                log_box = gr.Textbox(label="Monitor", lines=10)
+                gr.Markdown("<br>")
+                # Monitor de tráfico más grande
+                log_box = gr.Textbox(label="📊 Monitor de Tráfico (Live)", lines=16, interactive=False)
 
+            # NAVEGADOR
             with gr.Column(scale=6):
-                gr.HTML('<iframe src="https://civitai.com" style="width: 100%; height: 85vh; border-radius: 8px;"></iframe>')
+                gr.HTML('<iframe src="https://civitai.com" style="width: 100%; height: 90vh; border: 2px solid #222; border-radius: 12px;"></iframe>')
 
-        # Conexión de eventos
+        # EVENTOS
         timer.tick(fn=master_tick, inputs=[url_box, sniper, auto, th_slider], outputs=[url_box, log_box])
-        btn_manual.click(fn=lambda x: gr.update(value=x), inputs=[url_box], outputs=[url_box]) # Trigger manual
+        btn_manual.click(fn=lambda x: gr.update(value=x), inputs=[url_box], outputs=[url_box])
         btn_clear.click(fn=clear_all, outputs=[url_box, log_box])
         btn_folder.click(fn=open_loras)
         
