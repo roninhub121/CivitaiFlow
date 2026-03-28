@@ -14,11 +14,11 @@ LORA_DIR = os.path.join(paths.models_path, "Lora")
 
 # --- ESTADO GLOBAL ---
 DOWNLOAD_STATUS = {}
+EXPIRATION_REGISTRY = {} # Registro de limpieza individual
 ACTIVE_TASKS = 0
 TASK_LOCK = threading.Lock()
 LAST_CLIPBOARD = ""
 PROCESSED_IDS = set()
-LAST_FINISH_TIME = 0
 
 def on_ui_settings():
     section = ('civitai_flow', "CivitaiFlow Manager")
@@ -94,7 +94,7 @@ def download_by_id(model_id, api_key):
     except Exception as e: DOWNLOAD_STATUS[tracker_name] = f"❌ Error: {str(e)[:20]}"
 
 def master_tick(current_text, is_sniper, is_auto, threads):
-    global LAST_CLIPBOARD, ACTIVE_TASKS, DOWNLOAD_STATUS, TASK_LOCK, PROCESSED_IDS, LAST_FINISH_TIME
+    global LAST_CLIPBOARD, ACTIVE_TASKS, DOWNLOAD_STATUS, TASK_LOCK, PROCESSED_IDS, EXPIRATION_REGISTRY
     api_key = shared.opts.data.get("civitai_api_key", "")
     current_text = current_text or ""
     text_update = gr.update()
@@ -108,15 +108,13 @@ def master_tick(current_text, is_sniper, is_auto, threads):
                 current_text = current_text.strip() + "\n" + clip if current_text.strip() else clip
                 text_update = current_text
 
-    # 2. Auto-descarga + Auto-Limpieza de caja
+    # 2. Auto-descarga + Limpieza de caja
     if is_auto:
         all_ids = parse_civitai_urls(current_text)
         new_ids = [m_id for m_id in all_ids if m_id not in PROCESSED_IDS]
         if new_ids:
             with TASK_LOCK:
-                if ACTIVE_TASKS == 0: DOWNLOAD_STATUS.clear()
                 ACTIVE_TASKS += len(new_ids)
-                LAST_FINISH_TIME = 0
                 for m_id in new_ids: PROCESSED_IDS.add(m_id)
             def run_queue(ids):
                 with ThreadPoolExecutor(max_workers=int(threads)) as executor:
@@ -126,32 +124,33 @@ def master_tick(current_text, is_sniper, is_auto, threads):
                             global ACTIVE_TASKS
                             ACTIVE_TASKS -= 1
             threading.Thread(target=run_queue, args=(new_ids,), daemon=True).start()
-            text_update = "" # LIMPIEZA AUTOMÁTICA DE LA CAJA
+            text_update = "" 
 
-    # 3. Auto-limpieza de Logs (15 seg)
-    if ACTIVE_TASKS > 0: LAST_FINISH_TIME = 0
-    elif DOWNLOAD_STATUS and LAST_FINISH_TIME == 0: LAST_FINISH_TIME = time.time()
-    elif DOWNLOAD_STATUS and LAST_FINISH_TIME > 0:
-        if (time.time() - LAST_FINISH_TIME) > 15:
-            DOWNLOAD_STATUS.clear()
-            LAST_FINISH_TIME = 0
-            return text_update, ""
+    # 3. Lógica de Limpieza Individual Inteligente
+    now = time.time()
+    for name, status in list(DOWNLOAD_STATUS.items()):
+        # Si el archivo terminó o ya existía
+        if "✅ OK" in status or "⏭️ Ya existe" in status or "❌ Error" in status:
+            if name not in EXPIRATION_REGISTRY:
+                EXPIRATION_REGISTRY[name] = now
+            elif now - EXPIRATION_REGISTRY[name] > 8: # 8 Segundos para leer y fuera
+                del DOWNLOAD_STATUS[name]
+                del EXPIRATION_REGISTRY[name]
 
-    if ACTIVE_TASKS > 0:
-        log_out = [f"📊 COLA ACTIVA: {ACTIVE_TASKS}\n" + "-"*25]
-        log_out.extend([f"📦 {n[:28]}\n  └ {s}\n" for n, s in DOWNLOAD_STATUS.items()])
+    if ACTIVE_TASKS > 0 or DOWNLOAD_STATUS:
+        log_out = []
+        if ACTIVE_TASKS > 0: log_out.append(f"📊 COLA ACTIVA: {ACTIVE_TASKS}\n" + "-"*25)
+        log_out.extend([f"📦 {n[:32]}\n  └ {s}\n" for n, s in DOWNLOAD_STATUS.items()])
         return text_update, "\n".join(log_out)
-    elif DOWNLOAD_STATUS:
-        log_out = ["🚀 TAREAS FINALIZADAS\n" + "="*25]
-        log_out.extend([f"📦 {n[:28]}\n  └ {s}\n" for n, s in DOWNLOAD_STATUS.items()])
-        return text_update, "\n".join(log_out)
+    
     return text_update, ""
 
 def clear_all():
-    global DOWNLOAD_STATUS, PROCESSED_IDS, LAST_CLIPBOARD
+    global DOWNLOAD_STATUS, PROCESSED_IDS, LAST_CLIPBOARD, EXPIRATION_REGISTRY
     with TASK_LOCK:
         DOWNLOAD_STATUS.clear()
         PROCESSED_IDS.clear()
+        EXPIRATION_REGISTRY.clear()
         LAST_CLIPBOARD = ""
     return "", ""
 
@@ -164,20 +163,20 @@ def on_ui_tabs():
         timer = gr.Timer(1.5)
         with gr.Row():
             with gr.Column(scale=1):
-                gr.Markdown("### 📡 CivitaiFlow v18")
+                gr.Markdown("### 📡 CivitaiFlow v19")
                 with gr.Group():
                     with gr.Row():
-                        sniper = gr.Checkbox(label="🎯 Sniper", value=False)
+                        sniper = gr.Checkbox(label="🎯 Sniper", value=True)
                         auto = gr.Checkbox(label="⚡ Auto-DL", value=True)
-                    url_box = gr.Textbox(label="📥 Ingesta (Se limpia solo)", lines=2, placeholder="Copia links aquí...")
+                    url_box = gr.Textbox(label="📥 Ingesta", lines=2, placeholder="Sniper Activo...")
                     with gr.Row():
-                        btn_clear = gr.Button("🗑️ Limpiar", variant="secondary")
-                        btn_folder = gr.Button("📂 Abrir", variant="secondary")
+                        btn_clear = gr.Button("🗑️ Reset")
+                        btn_folder = gr.Button("📂 Abrir")
                     btn_manual = gr.Button("🚀 PROCESAR MANUAL", variant="primary")
                 with gr.Accordion("⚙️ Red", open=False):
                     th_slider = gr.Slider(1, 10, 5, step=1, label="Hilos")
                 gr.Markdown("<br>")
-                log_box = gr.Textbox(label="📊 Monitor de Tráfico (Live)", lines=22, interactive=False)
+                log_box = gr.Textbox(label="📊 Monitor (Limpieza Auto: 8s)", lines=25, interactive=False)
 
             with gr.Column(scale=6):
                 gr.HTML('<iframe src="https://civitai.com" style="width: 100%; height: 90vh; border: 2px solid #222; border-radius: 12px;"></iframe>')
