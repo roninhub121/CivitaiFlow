@@ -16,7 +16,7 @@ LORA_DIR = os.path.join(paths.models_path, "Lora")
 DOWNLOAD_STATUS = {}
 ACTIVE_TASKS = 0
 TASK_LOCK = threading.Lock()
-LAST_COPIED_URL = ""
+LAST_CLIPBOARD = ""
 PROCESSED_IDS = set()
 
 def on_ui_settings():
@@ -24,20 +24,30 @@ def on_ui_settings():
     shared.opts.add_option("civitai_api_key", shared.OptionInfo("", "Civitai API Key (Ronin Edition)", gr.Textbox, {"visible": True}, section=section))
 script_callbacks.on_ui_settings(on_ui_settings)
 
+# --- HOOK NATIVO DE WINDOWS (SEGURO) ---
 def get_windows_clipboard():
     try:
-        if not ctypes.windll.user32.OpenClipboard(0): return ""
-        handle = ctypes.windll.user32.GetClipboardData(13) 
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        
+        for _ in range(3): # Reintentos anti-bloqueo
+            if user32.OpenClipboard(0): break
+            time.sleep(0.05)
+        else: return ""
+            
+        handle = user32.GetClipboardData(13) 
         if not handle:
-            ctypes.windll.user32.CloseClipboard()
+            user32.CloseClipboard()
             return ""
-        pcontents = ctypes.windll.kernel32.GlobalLock(handle)
+            
+        pcontents = kernel32.GlobalLock(handle)
         if not pcontents: 
-            ctypes.windll.user32.CloseClipboard()
+            user32.CloseClipboard()
             return ""
+            
         data = ctypes.c_wchar_p(pcontents).value
-        ctypes.windll.kernel32.GlobalUnlock(handle)
-        ctypes.windll.user32.CloseClipboard()
+        kernel32.GlobalUnlock(handle)
+        user32.CloseClipboard()
         return data or ""
     except:
         try: ctypes.windll.user32.CloseClipboard()
@@ -50,7 +60,7 @@ def parse_civitai_urls(text):
     numbers = re.findall(r'^\d+$', text, re.MULTILINE)
     return list(set(matches + numbers))
 
-# --- MOTOR DE DESCARGA ---
+# --- MOTOR DE DESCARGA (Con manejo de caídas de Civitai) ---
 def download_by_id(model_id, api_key):
     global DOWNLOAD_STATUS
     tracker_name = f"ID: {model_id}"
@@ -60,7 +70,12 @@ def download_by_id(model_id, api_key):
     
     try:
         model_url = f"https://civitai.com/api/v1/models/{model_id}"
-        model_data = requests.get(model_url, headers=headers, timeout=15).json()
+        r = requests.get(model_url, headers=headers, timeout=15)
+        if r.status_code != 200:
+            DOWNLOAD_STATUS[tracker_name] = f"❌ Error API: HTTP {r.status_code} (¿Civitai Caído?)"
+            return
+        model_data = r.json()
+        
         if 'modelVersions' not in model_data: 
             DOWNLOAD_STATUS[tracker_name] = "❌ Error: Modelo no encontrado"
             return
@@ -70,7 +85,7 @@ def download_by_id(model_id, api_key):
         primary_file = next((f for f in files_list if f['type'] == 'Model' and f['name'].endswith('.safetensors')), None)
         download_url = primary_file['downloadUrl'] + f"?token={api_key}" if primary_file else f"https://civitai.com/api/download/models/{version['id']}?token={api_key}"
     except Exception as e:
-        DOWNLOAD_STATUS[tracker_name] = f"❌ Error API (¿Civitai caído?): {str(e)}"
+        DOWNLOAD_STATUS[tracker_name] = f"❌ Error de Conexión: {str(e)}"
         return
 
     model_title = model_data.get('name', f"Civitai_Model_{model_id}")
@@ -117,88 +132,115 @@ def download_by_id(model_id, api_key):
                         speed_mb = (downloaded_bytes / (1024*1024)) / elapsed if elapsed > 0 else 0
                         DOWNLOAD_STATUS[tracker_name] = f"⬇️ {(downloaded_bytes/total_size)*100:.1f}% | {speed_mb:.1f} MB/s" if total_size > 0 else f"⬇️ {downloaded_bytes/(1024*1024):.1f} MB | {speed_mb:.1f} MB/s"
             DOWNLOAD_STATUS[tracker_name] = "✅ Completado"
-        else: DOWNLOAD_STATUS[tracker_name] = f"❌ Error HTTP {r.status_code} (Revisa Civitai)"
+        else: DOWNLOAD_STATUS[tracker_name] = f"❌ Error HTTP {r.status_code} (Civitai rechazó la descarga)"
     except Exception as e: DOWNLOAD_STATUS[tracker_name] = f"❌ Error Crítico: {str(e)}"
 
-# --- LÓGICA CENTRAL EVENT-DRIVEN ---
-def process_tick(current_text, is_sniper, is_auto, threads):
-    global LAST_COPIED_URL, ACTIVE_TASKS, DOWNLOAD_STATUS, TASK_LOCK, PROCESSED_IDS
+
+# --- GENERADORES PUROS DE PYTHON (Cero JavaScript) ---
+def sniper_loop(is_sniper, is_auto, current_text, threads):
+    global LAST_CLIPBOARD, ACTIVE_TASKS, TASK_LOCK, PROCESSED_IDS
     api_key = shared.opts.data.get("civitai_api_key", "")
     current_text = current_text or ""
-    
-    text_out = gr.update()
-    
-    # 1. Sniper Mode (Añade a la caja de texto)
-    if is_sniper:
+
+    if not is_sniper:
+        yield current_text, "🎯 Modo Sniper [Desactivado]"
+        return
+
+    yield current_text, "🎯 Modo Sniper [ON] - Escuchando portapapeles..."
+
+    while is_sniper:
+        time.sleep(1.0) # Pulso seguro para no saturar FastAPI
+        changed = False
+        log_out = ""
+
+        # 1. Leer Portapapeles
         clip = get_windows_clipboard()
-        if clip and "civitai.com/models/" in clip and clip != LAST_COPIED_URL:
-            LAST_COPIED_URL = clip
+        if clip and "civitai.com/models/" in clip and clip != LAST_CLIPBOARD:
+            LAST_CLIPBOARD = clip
             if clip not in current_text:
                 current_text = current_text.strip() + "\n" + clip if current_text.strip() else clip
-                text_out = current_text
+                changed = True
 
-    # 2. Análisis de la Caja de Texto (Detecta Auto-Descarga incluso si pegas manualmente)
-    all_ids_in_box = parse_civitai_urls(current_text)
-    new_ids = [m_id for m_id in all_ids_in_box if m_id not in PROCESSED_IDS]
-    
-    if is_auto and new_ids:
-        with TASK_LOCK:
-            if ACTIVE_TASKS == 0: DOWNLOAD_STATUS.clear()
-            ACTIVE_TASKS += len(new_ids)
-            for m_id in new_ids: PROCESSED_IDS.add(m_id) # Se marca como procesado
-            
-        def run_dl(ids_to_dl):
-            with ThreadPoolExecutor(max_workers=int(threads)) as executor:
-                for m_id in ids_to_dl:
-                    download_by_id(m_id, api_key)
-                    with TASK_LOCK:
-                        global ACTIVE_TASKS
-                        ACTIVE_TASKS -= 1
-        threading.Thread(target=run_dl, args=(new_ids,), daemon=True).start()
+                # 2. Auto-Descarga Automática
+                if is_auto:
+                    ids = parse_civitai_urls(clip)
+                    new_ids = [i for i in ids if i not in PROCESSED_IDS]
+                    if new_ids:
+                        with TASK_LOCK:
+                            if ACTIVE_TASKS == 0: DOWNLOAD_STATUS.clear()
+                            ACTIVE_TASKS += len(new_ids)
+                            for i in new_ids: PROCESSED_IDS.add(i)
 
-    # 3. Formateo de Consola
-    if ACTIVE_TASKS > 0:
-        log_lines = [f"📊 TAREAS EN COLA: {ACTIVE_TASKS}\n" + "-"*30]
-        log_lines.extend([f"📦 {n}\n   └─ {s}\n" for n, s in DOWNLOAD_STATUS.items()])
-        log_out = "\n".join(log_lines)
-    elif len(DOWNLOAD_STATUS) > 0:
-        log_lines = ["🚀 TODAS LAS TAREAS FINALIZADAS\n" + "="*30]
-        log_lines.extend([f"📦 {n}\n   └─ {s}\n" for n, s in DOWNLOAD_STATUS.items()])
-        log_out = "\n".join(log_lines)
-    else:
-        log_out = "Esperando instrucciones..."
-        
-    return text_out, log_out
+                        def run_dl(dl_ids):
+                            with ThreadPoolExecutor(max_workers=int(threads)) as executor:
+                                for m_id in dl_ids:
+                                    download_by_id(m_id, api_key)
+                                    with TASK_LOCK:
+                                        global ACTIVE_TASKS
+                                        ACTIVE_TASKS -= 1
+                        threading.Thread(target=run_dl, args=(new_ids,), daemon=True).start()
 
-def manual_download_trigger(current_text, threads):
+        # 3. Refresco Visual
+        if ACTIVE_TASKS > 0:
+            log_lines = [f"📊 TAREAS EN COLA: {ACTIVE_TASKS}\n" + "-"*30]
+            log_lines.extend([f"📦 {n}\n   └─ {s}\n" for n, s in DOWNLOAD_STATUS.items()])
+            log_out = "\n".join(log_lines)
+            changed = True
+        elif len(DOWNLOAD_STATUS) > 0:
+            log_lines = ["🚀 TODAS LAS TAREAS FINALIZADAS\n" + "="*30]
+            log_lines.extend([f"📦 {n}\n   └─ {s}\n" for n, s in DOWNLOAD_STATUS.items()])
+            log_out = "\n".join(log_lines)
+            changed = True
+
+        if changed:
+            yield current_text, log_out
+
+def process_manual(current_text, threads):
     global ACTIVE_TASKS, TASK_LOCK, PROCESSED_IDS
     api_key = shared.opts.data.get("civitai_api_key", "")
-    if not api_key: return "❌ Configura tu API Key primero."
-    
-    all_ids = parse_civitai_urls(current_text or "")
-    if not all_ids: return "⚠️ No hay links válidos en la caja."
+    current_text = current_text or ""
+
+    if not api_key:
+        yield "❌ Error: Configura tu API Key en la pestaña Settings."
+        return
+
+    ids = parse_civitai_urls(current_text)
+    new_ids = [i for i in ids if i not in PROCESSED_IDS]
+
+    if not new_ids:
+        yield "⚠️ No hay links nuevos por procesar."
+        return
 
     with TASK_LOCK:
         if ACTIVE_TASKS == 0: DOWNLOAD_STATUS.clear()
-        ACTIVE_TASKS += len(all_ids)
-        for m_id in all_ids: PROCESSED_IDS.add(m_id) # Al procesar manual, se marca
-        
-    def run_dl(ids_to_dl):
+        ACTIVE_TASKS += len(new_ids)
+        for i in new_ids: PROCESSED_IDS.add(i)
+
+    def run_dl(dl_ids):
         with ThreadPoolExecutor(max_workers=int(threads)) as executor:
-            for m_id in ids_to_dl:
+            for m_id in dl_ids:
                 download_by_id(m_id, api_key)
                 with TASK_LOCK:
                     global ACTIVE_TASKS
                     ACTIVE_TASKS -= 1
-    threading.Thread(target=run_dl, args=(all_ids,), daemon=True).start()
-    return "🚀 Forzando descargas manuales..."
+    threading.Thread(target=run_dl, args=(new_ids,), daemon=True).start()
+
+    while ACTIVE_TASKS > 0:
+        time.sleep(1)
+        log_lines = [f"📊 TAREAS EN COLA: {ACTIVE_TASKS}\n" + "-"*30]
+        log_lines.extend([f"📦 {n}\n   └─ {s}\n" for n, s in DOWNLOAD_STATUS.items()])
+        yield "\n".join(log_lines)
+
+    log_lines = ["🚀 TODAS LAS TAREAS FINALIZADAS\n" + "="*30]
+    log_lines.extend([f"📦 {n}\n   └─ {s}\n" for n, s in DOWNLOAD_STATUS.items()])
+    yield "\n".join(log_lines)
 
 def clear_boxes():
     global DOWNLOAD_STATUS, PROCESSED_IDS
     with TASK_LOCK:
         if ACTIVE_TASKS == 0: 
             DOWNLOAD_STATUS.clear()
-            PROCESSED_IDS.clear() # Limpiamos el historial para permitir bajar los mismos links de nuevo si se borraron
+            PROCESSED_IDS.clear()
     return "", ""
 
 def open_lora_folder():
@@ -208,14 +250,9 @@ def open_lora_folder():
 
 # --- INTERFAZ UI ---
 def on_ui_tabs():
-    custom_css = """
-    #cf_clear_log_btn { min-width: auto !important; padding: 0px 6px !important; height: 1.5em !important; font-size: 11px !important; margin-left: 10px !important; }
-    #cf_poll_btn { display: none !important; position: absolute; width: 0; height: 0; }
-    """
+    custom_css = "#cf_clear_log_btn { min-width: auto !important; padding: 0px 6px !important; height: 1.5em !important; font-size: 11px !important; margin-left: 10px !important; }"
     
     with gr.Blocks(analytics_enabled=False, css=custom_css) as civitai_flow_tab:
-        
-        poll_btn = gr.Button("poll", elem_id="cf_poll_btn")
 
         with gr.Row():
             with gr.Column(scale=1):
@@ -236,33 +273,18 @@ def on_ui_tabs():
                 gr.Markdown("<br>")
                 with gr.Row(variant="compact"):
                     gr.Markdown("#### 📊 Monitor de Tráfico")
+                    clear_log_btn = gr.Button("Limpiar 🗑️", variant="secondary", elem_id="cf_clear_log_btn")
                 status_log = gr.Textbox(label="Status Log Output", show_label=False, lines=12)
 
             with gr.Column(scale=6):
                 gr.HTML('<iframe src="https://civitai.com" style="width: 100%; height: 85vh; border: 2px solid #333; border-radius: 8px;"></iframe>')
 
         # --- EVENTOS ---
-        poll_btn.click(fn=process_tick, inputs=[url_input, sniper_mode, auto_dl_mode, threads_slider], outputs=[url_input, status_log])
-        download_btn.click(fn=manual_download_trigger, inputs=[url_input, threads_slider], outputs=[status_log])
+        sniper_mode.change(fn=sniper_loop, inputs=[sniper_mode, auto_dl_mode, url_input, threads_slider], outputs=[url_input, status_log])
+        download_btn.click(fn=process_manual, inputs=[url_input, threads_slider], outputs=[status_log])
         clear_btn.click(fn=clear_boxes, inputs=[], outputs=[url_input, status_log])
         folder_btn.click(fn=open_lora_folder, inputs=[], outputs=[])
-        
-        # JS Inyector relajado y seguro (2 segundos, no asfixia al servidor)
-        js_onload = """
-        () => {
-            if (!window.cf_poller_active) {
-                window.cf_poller_active = true;
-                setInterval(() => {
-                    let wrap = document.querySelector('#cf_poll_btn');
-                    if (wrap) {
-                        let btn = wrap.tagName === 'BUTTON' ? wrap : wrap.querySelector('button');
-                        if (btn) btn.click();
-                    }
-                }, 2000); 
-            }
-        }
-        """
-        civitai_flow_tab.load(fn=None, inputs=[], outputs=[], _js=js_onload)
+        clear_log_btn.click(fn=clear_boxes, inputs=[], outputs=[url_input, status_log]) # Usamos clear_boxes para limpiar todo
         
     return [(civitai_flow_tab, "CivitaiFlow", "civitai_flow_tab")]
 
