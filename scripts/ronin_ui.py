@@ -14,7 +14,7 @@ LORA_DIR = os.path.join(paths.models_path, "Lora")
 
 # --- ESTADO GLOBAL ---
 DOWNLOAD_STATUS = {}
-EXPIRATION_REGISTRY = {} # Registro de limpieza individual
+EXPIRATION_REGISTRY = {}
 ACTIVE_TASKS = 0
 TASK_LOCK = threading.Lock()
 LAST_CLIPBOARD = ""
@@ -99,7 +99,7 @@ def master_tick(current_text, is_sniper, is_auto, threads):
     current_text = current_text or ""
     text_update = gr.update()
     
-    # 1. Sniper
+    # 1. Sniper Automático
     if is_sniper:
         clip = get_windows_clipboard()
         if clip and "civitai.com/models/" in clip and clip != LAST_CLIPBOARD:
@@ -108,7 +108,7 @@ def master_tick(current_text, is_sniper, is_auto, threads):
                 current_text = current_text.strip() + "\n" + clip if current_text.strip() else clip
                 text_update = current_text
 
-    # 2. Auto-descarga + Limpieza de caja
+    # 2. Motor de Reacción Automática (Auto-DL)
     if is_auto:
         all_ids = parse_civitai_urls(current_text)
         new_ids = [m_id for m_id in all_ids if m_id not in PROCESSED_IDS]
@@ -124,35 +124,33 @@ def master_tick(current_text, is_sniper, is_auto, threads):
                             global ACTIVE_TASKS
                             ACTIVE_TASKS -= 1
             threading.Thread(target=run_queue, args=(new_ids,), daemon=True).start()
-            text_update = "" 
+            text_update = "" # Purga inmediata tras ingesta
 
-    # 3. Lógica de Limpieza Individual Inteligente
+    # 3. Limpieza de logs individual (TTL 8s)
     now = time.time()
     for name, status in list(DOWNLOAD_STATUS.items()):
-        # Si el archivo terminó o ya existía
         if "✅ OK" in status or "⏭️ Ya existe" in status or "❌ Error" in status:
-            if name not in EXPIRATION_REGISTRY:
-                EXPIRATION_REGISTRY[name] = now
-            elif now - EXPIRATION_REGISTRY[name] > 8: # 8 Segundos para leer y fuera
+            if name not in EXPIRATION_REGISTRY: EXPIRATION_REGISTRY[name] = now
+            elif now - EXPIRATION_REGISTRY[name] > 8:
                 del DOWNLOAD_STATUS[name]
                 del EXPIRATION_REGISTRY[name]
 
     if ACTIVE_TASKS > 0 or DOWNLOAD_STATUS:
         log_out = []
-        if ACTIVE_TASKS > 0: log_out.append(f"📊 COLA ACTIVA: {ACTIVE_TASKS}\n" + "-"*25)
+        if ACTIVE_TASKS > 0: log_out.append(f"📊 DESCARGAS ACTIVAS: {ACTIVE_TASKS}\n" + "-"*25)
         log_out.extend([f"📦 {n[:32]}\n  └ {s}\n" for n, s in DOWNLOAD_STATUS.items()])
         return text_update, "\n".join(log_out)
     
-    return text_update, ""
+    return text_update, "😴 Sistema en espera... Copia un link de Civitai para despertar."
 
-def clear_all():
+def reset_all():
     global DOWNLOAD_STATUS, PROCESSED_IDS, LAST_CLIPBOARD, EXPIRATION_REGISTRY
     with TASK_LOCK:
         DOWNLOAD_STATUS.clear()
         PROCESSED_IDS.clear()
         EXPIRATION_REGISTRY.clear()
         LAST_CLIPBOARD = ""
-    return "", ""
+    return "", "Caché reiniciada."
 
 def open_loras():
     os.makedirs(LORA_DIR, exist_ok=True)
@@ -163,27 +161,27 @@ def on_ui_tabs():
         timer = gr.Timer(1.5)
         with gr.Row():
             with gr.Column(scale=1):
-                gr.Markdown("### 📡 CivitaiFlow v19")
+                gr.Markdown("### 📡 CivitaiFlow v20 (Full-Auto)")
                 with gr.Group():
                     with gr.Row():
                         sniper = gr.Checkbox(label="🎯 Sniper", value=True)
                         auto = gr.Checkbox(label="⚡ Auto-DL", value=True)
-                    url_box = gr.Textbox(label="📥 Ingesta", lines=2, placeholder="Sniper Activo...")
+                    url_box = gr.Textbox(label="📥 Puente de Ingesta", lines=1, placeholder="Sniper armado...")
                     with gr.Row():
-                        btn_clear = gr.Button("🗑️ Reset")
-                        btn_folder = gr.Button("📂 Abrir")
-                    btn_manual = gr.Button("🚀 PROCESAR MANUAL", variant="primary")
+                        btn_clear = gr.Button("🗑️ Reset", variant="secondary")
+                        btn_folder = gr.Button("📂 Abrir Lora", variant="secondary")
+                
                 with gr.Accordion("⚙️ Red", open=False):
-                    th_slider = gr.Slider(1, 10, 5, step=1, label="Hilos")
+                    th_slider = gr.Slider(1, 10, 5, step=1, label="Hilos Simultáneos")
+                
                 gr.Markdown("<br>")
-                log_box = gr.Textbox(label="📊 Monitor (Limpieza Auto: 8s)", lines=25, interactive=False)
+                log_box = gr.Textbox(label="📊 Monitor de Tráfico (Live)", lines=28, interactive=False)
 
             with gr.Column(scale=6):
                 gr.HTML('<iframe src="https://civitai.com" style="width: 100%; height: 90vh; border: 2px solid #222; border-radius: 12px;"></iframe>')
 
         timer.tick(fn=master_tick, inputs=[url_box, sniper, auto, th_slider], outputs=[url_box, log_box])
-        btn_manual.click(fn=lambda x: gr.update(value=x), inputs=[url_box], outputs=[url_box])
-        btn_clear.click(fn=clear_all, outputs=[url_box, log_box])
+        btn_clear.click(fn=reset_all, outputs=[url_box, log_box])
         btn_folder.click(fn=open_loras)
     return [(cf_tab, "CivitaiFlow", "cf_tab")]
 
