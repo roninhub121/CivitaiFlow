@@ -23,12 +23,15 @@ jobs:
         run: |
           python -m py_compile scripts/ronin_ui.py
           python -m py_compile scripts/zz_civitaiflow_library.py
+          python -m py_compile scripts/zzz_civitaiflow_updates.py
+          python -m py_compile scripts/zzzz_civitaiflow_lifecycle.py
           python -m py_compile install.py
 
       - name: Check browser JavaScript syntax
         run: |
           node --check javascript/civitai_flow.js
           node --check javascript/library_status.js
+          node --check javascript/update_center.js
           node --check browser-extension/background.js
           node --check browser-extension/content.js
 
