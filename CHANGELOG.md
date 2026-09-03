@@ -2,6 +2,42 @@
 
 All notable changes to CivitaiFlow are documented here.
 
+## [22.6] - 2026-09-03
+
+### Model Update Center
+
+- Added `scripts/zzz_civitaiflow_updates.py` on top of the 22.5 Library Intelligence layer.
+- Added scheduled scans that group the indexed local library by Civitai model ID and check the newest downloadable Civitai version for each known model family.
+- Update detection compares the latest remote `modelVersionId` and SHA-256 with the local index instead of relying on filenames.
+- Added persisted update metadata under `<data-dir>/civitai-flow/update-cache.json`.
+- Added `javascript/update_center.js` with a compact Forge **Model updates** panel, manual scan, review list, per-model update action and **Update all** action.
+- The Update Center shows live queued/downloading state by reusing the Library Intelligence status layer.
+
+### Safe auto-update
+
+- Added four update modes in **Forge → Settings → CivitaiFlow Manager**:
+  - `Disabled`;
+  - `Notify only` (default);
+  - `Auto-download LoRAs (keep old)`;
+  - `Auto-download LoRAs + checkpoints (keep old)`.
+- Added configurable update-check interval, auto-update concurrency, maximum automatic updates per scan, and startup check toggle.
+- Scheduled auto-update deliberately keeps existing model versions. v22.6 never deletes or blindly replaces an older checkpoint/LoRA as part of automatic updating.
+- Automatic updates are handed to the existing smart acquisition path using the exact target `modelVersionId`, so duplicate checks, storage routing, `.part` transfers, SHA-256 verification, collision-safe filenames, metadata and index registration are reused.
+- Automatic update batches are capped per scan by default to avoid unexpectedly queueing a very large library all at once.
+
+### Local API
+
+- Added loopback-only update endpoints:
+  - `GET /civitaiflow/api/updates`;
+  - `POST /civitaiflow/api/updates/scan`;
+  - `POST /civitaiflow/api/updates/apply`;
+  - `POST /civitaiflow/api/updates/apply-all`.
+- Update endpoints inherit the same local-only security boundary as Library Intelligence.
+
+### Documentation
+
+- Added `docs/UPDATES.md` with update semantics, scheduler behavior, safe auto-update policies, local API, Browser Bridge relationship, and the future pin/archive/rollback roadmap.
+
 ## [22.5] - 2026-09-03
 
 ### Library Intelligence
