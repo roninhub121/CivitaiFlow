@@ -2,123 +2,112 @@
 
 All notable changes to CivitaiFlow are documented here.
 
+## [22.4.1] - 2026-09-03
+
+### Added
+
+- Added `javascript/civitai_flow.js` as a browser-side Companion Window enhancement.
+- The existing **Open Civitai in Browser** action is upgraded client-side to **Open Companion Window ↗**.
+- Companion browsing opens Civitai as a normal top-level window in the same browser running Forge.
+- Closing the companion window triggers a best-effort reload of the embedded Civitai panel.
+- **Get API Key ↗** is upgraded to open the current Civitai Account page (`/user/account`) in the same browser profile.
+- Added `docs/ARCHITECTURE.md` with the product objective, deep technical audit, risk register, and target architecture.
+- Added `docs/AUTHENTICATION.md` with the browser/API/OAuth trust model and future PKCE design.
+
+### Documentation refresh
+
+- Reframed CivitaiFlow around its actual product goal: **discover on Civitai → capture → resolve → download → organize → use in Forge**.
+- Reclassified the iframe as a convenience discovery surface rather than a guaranteed integration contract.
+- Documented Companion Window mode as the supported fallback when embedding or iframe authentication fails.
+- Documented why an API key authenticates backend downloads but cannot create a Civitai website session.
+- Documented Google embedded-user-agent restrictions, anti-framing headers, third-party-cookie behavior, and Storage Access API limitations.
+- Documented the official Civitai OAuth Authorization Code + PKCE path as the preferred future replacement for manual API-key copy/paste once CivitaiFlow has its own OAuth client registration.
+- Added explicit security guidance against cookie scraping, token-to-cookie injection, header stripping, and reverse-proxy anti-framing bypasses.
+
+### Audit findings recorded
+
+- P0: iframe availability/login is controlled by browser and Civitai policy, not CivitaiFlow.
+- P1: download routing currently assumes LoRA storage.
+- P1: copied `modelVersionId` intent is not fully preserved by the current resolver.
+- P1: API keys are persisted through Forge configuration without CivitaiFlow-specific encryption.
+- P2: in-memory state assumes a local/single-user Forge process.
+- P2: Sniper clipboard capture is Windows/PowerShell-specific.
+- P2: first-tag folder routing is not a durable local taxonomy.
+- P2: post-download hash verification is still missing.
+
 ## [22.4] - 2026-09-03
 
 ### Added
 
-- Inline **API Access** card inside the main CivitaiFlow tab.
+- Inline **Civitai connection** card inside the main CivitaiFlow tab.
 - Masked API-key input.
-- **Connect API** action that validates a candidate key against `GET /api/v1/me` before persisting it.
-- **Verify** action for the currently saved key.
-- **Get API Key** action that opens Civitai Settings in the normal browser.
-- **Disconnect** action that removes the saved Civitai API key from Forge configuration.
-- Authenticated username display and masked key suffix after a successful connection.
-- Inline explanation of the difference between Civitai website authentication and CivitaiFlow API authentication.
+- **Connect API** validates a candidate key against `GET /api/v1/me` before persisting it.
+- **Verify** re-tests the currently saved key.
+- **Get API Key** opens Civitai account/settings in the browser.
+- **Disconnect** removes the saved Civitai API key from Forge configuration.
+- Authenticated username display and masked key suffix.
+- Inline explanation of the difference between website authentication and API authentication.
 - Custom CivitaiFlow SVG mark and version badge.
-- Card-based control deck styling and status indicators.
+- Card-based control-deck styling and restrained status indicators.
 
 ### Changed
 
-- Reworked the main UI into three compact sections: **Civitai connection**, **Capture & download**, and **Activity**.
-- Removed most emoji-heavy button labels in favor of cleaner text actions and restrained symbols.
+- Reworked the main UI into **Civitai connection**, **Capture & download**, and **Activity** sections.
+- Removed most emoji-heavy button labels.
 - Increased the embedded Civitai workspace relative to the control column.
 - Refined spacing, borders, terminal styling, status presentation, and dark-theme behavior.
-- Simplified telemetry strings to `ACTIVE`, `DONE`, and `ERROR` style output instead of decorative emoji states.
+- Simplified telemetry strings to `ACTIVE`, `DONE`, and `ERROR` style output.
 - Updated the CivitaiFlow user agent to `22.4`.
 - Renamed the Forge setting label to **Civitai API Key**.
 
 ### Authentication
 
 - API keys are validated before being saved from the CivitaiFlow tab.
-- Valid keys are persisted through Forge's native `shared.opts.set(...)` + `shared.opts.save(...)` configuration path.
-- API authentication remains Bearer-token based:
+- Valid keys are persisted through Forge's `shared.opts.set(...)` + `shared.opts.save(...)` configuration path.
+- API authentication uses:
 
   `Authorization: Bearer <CIVITAI_API_KEY>`
 
 - The API key authenticates CivitaiFlow API/download requests; it does not replace the embedded website's browser session.
-- Google/Civitai website login remains a normal-browser operation because Google OAuth can reject iframe/webview authentication.
-
-### Kept
-
-- Embedded Civitai iframe as the primary discovery experience.
-- Sniper clipboard capture and Auto Download workflow.
-- Real concurrent worker submission through `ThreadPoolExecutor.submit(...)`.
-- `.safetensors.part` temporary transfers with atomic rename after success.
-- Improved 401/403 handling and unknown `Content-Length` handling.
-- Windows-safe model/tag filenames.
-- Forge metadata and preview-image generation.
 
 ## [22.3] - 2026-09-03
 
 ### Restored
 
-- Restored the embedded `https://civitai.com` iframe as the primary CivitaiFlow browsing experience.
-- Restored the original product workflow: browse Civitai inside Forge, copy a model link, and let Sniper Mode / Auto-DL handle the download.
+- Restored the embedded `https://civitai.com` iframe as the primary visual browsing surface after the v22.2 regression.
+- Restored the original workflow: browse Civitai, copy a model link, let Sniper/Auto-DL handle acquisition.
 
 ### Fixed
 
-- Corrected the v22.2 product regression where the iframe was removed entirely to avoid Google OAuth-in-frame failures.
-- Google/Civitai account login is now explicitly opened in a normal browser tab instead of attempting to force OAuth inside the iframe.
-- Added **Reload Civitai Panel** so the embedded site can be refreshed after completing login externally.
+- Moved Google/Civitai account login back to a normal browser context instead of forcing OAuth inside the iframe.
+- Added **Reload Civitai Panel**.
 
 ### Kept from v22.2
 
 - Real concurrent worker submission through `ThreadPoolExecutor.submit(...)`.
-- Bearer-token API authentication for Civitai API/download requests.
-- `.safetensors.part` temporary download files with atomic rename after success.
+- Bearer-token API authentication.
+- `.safetensors.part` temporary downloads with atomic rename.
 - Improved HTTP 401/403 handling.
 - Unknown/zero `Content-Length` handling.
 - Windows-safe model/tag filenames.
-- Civitai model ID and version ID in generated Forge metadata.
+- Civitai model/version IDs in Forge metadata.
 - Preview-image and Forge metadata generation.
-
-### Architecture
-
-v22.3 uses a hybrid boundary:
-
-- **iframe:** primary Civitai discovery and browsing;
-- **normal browser:** Google OAuth / account login;
-- **API key:** authenticated Civitai API calls and gated downloads.
-
-This preserves CivitaiFlow's original embedded experience without pretending that Google OAuth is guaranteed to work inside an iframe. Browser third-party-cookie/privacy policy can still affect whether an external website login session is visible to the embedded Civitai frame.
 
 ## [22.2] - 2026-09-03
 
 ### Fixed
 
-- Removed the embedded `https://civitai.com` iframe that caused Google OAuth/login to fail with HTTP 403 inside Forge.
-- Replaced iframe-dependent authentication with a split architecture:
-  - normal system browser for Civitai website login;
-  - Civitai API key for API access and gated downloads.
-- Fixed the concurrency implementation. Previous code created a `ThreadPoolExecutor` but invoked `download_by_id(...)` directly in a normal loop, so downloads were effectively sequential.
-- Added safe `.part` download handling so interrupted transfers are not left looking like complete `.safetensors` files.
-- Added clearer handling for HTTP 401/403 authentication failures.
-- Added zero-length/unknown `Content-Length` handling to avoid progress calculation errors.
-- Sanitized Windows path components before creating tag folders and model filenames.
+- Replaced the ineffective sequential `ThreadPoolExecutor` usage with real submitted workers.
+- Added safe `.part` handling for interrupted downloads.
+- Added clearer HTTP 401/403 handling.
+- Added unknown/zero `Content-Length` support.
+- Sanitized Windows path components.
+- Switched API authentication toward Bearer headers instead of appending the key to generated download URLs.
 
-### Added
+### Experiment / regression
 
-- Native Civitai LoRA browser using `GET /api/v1/models`.
-- Search by model name.
-- Sort options: Highest Rated, Most Downloaded, and Newest.
-- Period filters: AllTime, Year, Month, Week, and Day.
-- Optional mature/NSFW search flag.
-- Search-result selector with model preview, creator, base model, version, description, and direct Civitai link.
-- Direct **Download selected LoRA** action from native search results.
-- **Check API** action using authenticated `GET /api/v1/me`.
-- **Open Civitai** action that launches the system browser.
-- Civitai model ID and version ID in generated Forge metadata.
-- Real background worker submission via `ThreadPoolExecutor.submit(...)`.
-
-### Changed
-
-- Civitai API authentication now prefers `Authorization: Bearer <token>` headers rather than appending the API key to download URLs.
-- The advanced setting label changed from **Concurrent Threads** to **Concurrent Downloads** to reflect actual behavior.
-
-### Security / reliability
-
-- API keys are no longer added to generated model download query strings by CivitaiFlow.
-- Partial model files are cleaned up on handled download failures.
+- Removed the iframe and introduced a native API browser to avoid embedded OAuth failures.
+- This solved one technical symptom but removed too much of the original product experience and was corrected in v22.3.
 
 ## [22.1]
 
@@ -126,7 +115,7 @@ This preserves CivitaiFlow's original embedded experience without pretending tha
 
 - Cleaned HTML from downloaded model descriptions.
 - Added Forge-compatible metadata handling.
-- Saved model preview images alongside downloaded LoRAs.
+- Saved model preview images beside downloaded LoRAs.
 
 ## [21]
 
