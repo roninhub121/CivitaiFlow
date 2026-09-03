@@ -1,0 +1,36 @@
+name: validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Compile Python sources
+        run: |
+          python -m py_compile scripts/ronin_ui.py
+          python -m py_compile scripts/zz_civitaiflow_library.py
+          python -m py_compile install.py
+
+      - name: Check browser JavaScript syntax
+        run: |
+          node --check javascript/civitai_flow.js
+          node --check javascript/library_status.js
+          node --check browser-extension/background.js
+          node --check browser-extension/content.js
+
+      - name: Validate Browser Bridge manifest JSON
+        run: python -m json.tool browser-extension/manifest.json >/dev/null
