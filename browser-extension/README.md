@@ -1,89 +1,170 @@
 # CivitaiFlow Browser Bridge
 
-The Browser Bridge is an optional Chrome / Edge extension that adds a **Send to Forge** action directly to Civitai model cards and model detail pages.
+The Browser Bridge is an optional Chrome / Edge extension that turns Civitai model cards into a one-click front end for the local CivitaiFlow service running in Stable Diffusion WebUI Forge.
 
-It exists for one reason: remove the last manual step in the original CivitaiFlow workflow.
-
-Without the bridge:
+Its goal is the shortest useful workflow possible:
 
 ```text
-See model → right-click → Copy link → Sniper capture → download
+See model → Send to Forge → duplicate check → download/verify → ready locally
 ```
 
-With the bridge:
+No right-click and no manual copy/paste are required when the local Forge bridge is reachable.
+
+## What appears on Civitai
+
+The content script enhances Civitai model cards and model detail pages with a compact action/state control.
+
+Possible states include:
 
 ```text
-See model → Send to Forge → Sniper capture → download
+Send to Forge
+Installed
+Update available
+Queued
+Downloading 64%
+Verifying
+Indexing library
 ```
+
+This means Civitai becomes a visual catalog for both remote discovery and local-library awareness: while browsing, you can see whether the target is already present in Forge.
 
 ## Why this is a browser extension
 
-Forge cannot inject controls into the DOM of a cross-origin `https://civitai.com` iframe because the browser's same-origin policy blocks parent-page JavaScript from reading or modifying that document.
+Forge cannot inject controls into the DOM of a cross-origin `https://civitai.com` iframe because the browser same-origin policy blocks parent-page JavaScript from reading or modifying that document.
 
-A browser content script that is explicitly installed for `https://civitai.com/*` runs inside the Civitai page itself. That lets CivitaiFlow add the button without reverse-proxying Civitai, stripping security headers, copying cookies, or weakening browser security.
+A content script explicitly installed for Civitai runs in the Civitai page itself and can add the controls without proxying Civitai, copying cookies, stripping security headers, or weakening browser security.
 
-The content script is configured with `all_frames: true`, so it can enhance Civitai both:
+The content script uses `all_frames: true`, so it can enhance Civitai both:
 
-- when Civitai renders in the Forge iframe; and
-- when Civitai is opened in the top-level Companion Window.
+- when Civitai successfully renders inside the Forge iframe; and
+- when Civitai is opened in the top-level CivitaiFlow Companion Window.
 
-## What the button does
+## Direct local bridge
 
-The bridge does not download files itself and does not receive your Civitai API token.
+Version 0.2 prefers a direct local connection instead of using the clipboard as the primary transport.
 
-When **Send to Forge** is clicked it:
+```text
+Civitai content script
+        ↓
+Browser Bridge service worker
+        ↓
+127.0.0.1:7860 / localhost:7860
+        ↓
+CivitaiFlow Forge API
+        ↓
+Smart resolver + library index + download manager
+```
 
-1. resolves the Civitai model URL from the card or current model page;
-2. preserves `modelVersionId` when that value exists in the URL;
-3. writes that URL to the browser / Windows clipboard;
-4. CivitaiFlow's existing Sniper capture sees the URL;
-5. Auto download can queue it immediately.
+The service worker talks only to the local CivitaiFlow endpoints exposed by Forge.
 
-This deliberately reuses the existing capture pipeline instead of creating a second downloader.
+The Python backend remains responsible for:
+
+- Civitai API authentication;
+- version resolution;
+- duplicate detection;
+- download routing;
+- SHA-256 verification;
+- local file writes.
+
+The browser extension does **not** receive your Civitai API token.
+
+## Clipboard / Sniper fallback
+
+The original Sniper workflow remains a fallback.
+
+If the local Forge service cannot be reached, **Send to Forge** writes the canonical Civitai model URL to the clipboard. Sniper capture can then process it exactly as before.
+
+So the extension degrades from:
+
+```text
+one-click direct bridge
+```
+
+to:
+
+```text
+one-click clipboard bridge → Sniper
+```
+
+rather than becoming unusable.
+
+## Version preservation
+
+If a Civitai URL contains a version selector, the Browser Bridge preserves it:
+
+```text
+https://civitai.com/models/123456?modelVersionId=987654
+```
+
+The Forge smart resolver uses that `modelVersionId` instead of silently choosing another version.
+
+## Local-library states
+
+### Installed
+
+The exact target is already in the indexed Forge library. The control remains visible and no second download is started.
+
+### Update available
+
+CivitaiFlow recognizes the model family locally, but the current/requested Civitai version is different.
+
+Clicking the control queues the newer/current target while preserving the existing file unless it is byte-identical.
+
+### Downloading
+
+The control polls the local Forge service and displays live transfer progress.
+
+### Indexing library
+
+On first startup CivitaiFlow builds a SHA-256 inventory of supported Forge model folders. Smart downloads are held until that initial inventory is ready so duplicate protection is not bypassed during startup.
 
 ## Install in Microsoft Edge
 
-1. Update CivitaiFlow from GitHub first.
-2. Open `edge://extensions`.
-3. Enable **Developer mode**.
-4. Click **Load unpacked**.
-5. Select the `browser-extension` directory from your local CivitaiFlow installation.
-6. Reload the CivitaiFlow / Civitai page.
+1. Update the CivitaiFlow Forge extension from GitHub.
+2. Restart Forge.
+3. Open `edge://extensions`.
+4. Enable **Developer mode**.
+5. If Browser Bridge was already loaded, click **Reload** on the extension card. Otherwise click **Load unpacked**.
+6. Select the `browser-extension` directory from the local CivitaiFlow installation.
+7. Reload Civitai / the CivitaiFlow tab.
 
 ## Install in Google Chrome
 
 1. Open `chrome://extensions`.
 2. Enable **Developer mode**.
-3. Click **Load unpacked**.
-4. Select the `browser-extension` directory from your local CivitaiFlow installation.
+3. Reload the existing Browser Bridge or click **Load unpacked**.
+4. Select the `browser-extension` directory from the local CivitaiFlow installation.
 5. Reload Civitai.
 
-## Expected behavior
+## Permissions
 
-On Civitai model cards, hovering the card reveals a small **Send to Forge** control over the preview.
+The Manifest V3 extension requests:
 
-On a model detail page, a persistent **Send to Forge** button appears in the lower-right corner.
+- `https://civitai.com/*` so it can enhance Civitai pages;
+- `http://127.0.0.1/*` and `http://localhost/*` so its background service worker can talk to local Forge;
+- `clipboardWrite` only for the Sniper fallback path.
 
-After clicking:
+It does not request browser history, password, cookie, or all-sites permissions.
 
-- **Sent to Forge** means the URL was successfully placed in the clipboard;
-- **Copy failed** means the browser refused clipboard access.
+## Local-only security boundary
 
-If **Sniper capture** and **Auto download** are enabled in Forge, a successful click should move directly into the normal CivitaiFlow acquisition pipeline.
+The Forge Browser Bridge API rejects non-loopback clients.
 
-## Security model
+This is intentional. If Forge is launched with `--listen`, CivitaiFlow should not automatically expose a remote model-download control surface to the LAN.
 
-The Browser Bridge requests only:
+The current Browser Bridge therefore targets a local Forge session on the default `7860` port.
 
-- access to `https://civitai.com/*`; and
-- clipboard write permission.
+A future release can add an explicit, opt-in configurable Forge URL with an authentication token for advanced remote setups.
 
-It does not request access to browser cookies, browsing history, passwords, or arbitrary websites.
+## DOM resilience
 
-It does not read the CivitaiFlow API key from Forge.
+Civitai does not expose a stable public DOM contract for model cards. The Browser Bridge identifies cards through Civitai model links plus bounded layout heuristics.
 
-## Current limitation
+If Civitai significantly changes its frontend markup, the button-placement heuristic may need to be updated. The Forge acquisition backend, local library index, and manual/Sniper capture remain independent from that DOM layer.
 
-The bridge identifies Civitai cards using model links and DOM heuristics because Civitai's website markup is not a stable public API. If Civitai significantly changes its card structure, the placement heuristic may need an update.
+## Related documentation
 
-The acquisition backend remains independent of this UI enhancement, so a Civitai markup change cannot break Sniper capture or manual link ingestion.
+- [Main README](../README.md)
+- [Library Intelligence](../docs/LIBRARY-INTELLIGENCE.md)
+- [Architecture](../docs/ARCHITECTURE.md)
+- [Authentication](../docs/AUTHENTICATION.md)
