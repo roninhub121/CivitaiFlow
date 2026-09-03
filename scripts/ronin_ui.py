@@ -25,9 +25,6 @@ LAST_CLIPBOARD = ""
 PROCESSED_IDS = set()
 FAILED_IDS = set()
 
-SEARCH_RESULTS = {}
-SEARCH_LOCK = threading.Lock()
-
 
 def on_ui_settings():
     section = ("civitai_flow", "CivitaiFlow Manager")
@@ -52,7 +49,7 @@ def get_api_key():
 
 def build_headers(api_key=None):
     api_key = (api_key if api_key is not None else get_api_key()).strip()
-    headers = {"User-Agent": "CivitaiFlow/22.2 (Stable Diffusion Forge)"}
+    headers = {"User-Agent": "CivitaiFlow/22.3 (Stable Diffusion Forge)"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
@@ -61,15 +58,15 @@ def build_headers(api_key=None):
 def initial_api_status():
     if get_api_key():
         return "🟠 **API key configured.** Click **Check API** to validate it."
-    return "🟡 **API key missing.** Public browsing works, but gated downloads require a key."
+    return "🟡 **API key missing.** Browsing still works in the embedded Civitai panel; gated downloads require a key."
 
 
 def check_api_status():
     api_key = get_api_key()
     if not api_key:
         return (
-            "🟡 **API key missing.** Add one in "
-            "**Settings → CivitaiFlow Manager**, apply settings, then check again."
+            "🟡 **API key missing.** Add one in **Settings → CivitaiFlow Manager**, "
+            "apply settings, then check again."
         )
 
     try:
@@ -84,7 +81,7 @@ def check_api_status():
             return f"🟢 **Civitai API connected** as `{username}`."
         if response.status_code in (401, 403):
             return "🔴 **API key rejected.** Generate a new key in Civitai and save it in Forge settings."
-        return f"🟠 **Civitai API responded with HTTP {response.status_code}.** Try again in a moment."
+        return f"🟠 **Civitai API responded with HTTP {response.status_code}.**"
     except requests.RequestException as exc:
         return f"🔴 **Could not reach Civitai API:** `{html.escape(str(exc)[:120])}`"
 
@@ -314,7 +311,6 @@ def start_downloads(model_ids, threads, force=False):
                 try:
                     future.result()
                 except Exception:
-                    # Worker already records model-specific failures; this guards the pool itself.
                     pass
 
     threading.Thread(target=run_pool, args=(accepted,), daemon=True).start()
@@ -401,153 +397,29 @@ def open_civitai():
     try:
         opened = webbrowser.open_new_tab(CIVITAI_BASE_URL)
         if opened:
-            return "🌐 Opened Civitai in your default browser. Sign in there; OAuth is intentionally not embedded."
-        return "🟠 Your browser did not acknowledge the request. Open `https://civitai.com` manually."
+            return (
+                "🌐 Opened Civitai in your normal browser. Complete Google/Civitai login there, "
+                "then return to Forge and reload the embedded panel."
+            )
+        return "🟠 Browser did not acknowledge the request. Open `https://civitai.com` manually."
     except Exception as exc:
         return f"❌ Could not open browser: `{html.escape(str(exc)[:120])}`"
 
 
-def _model_choice_label(item):
-    versions = item.get("modelVersions") or []
-    base_model = versions[0].get("baseModel", "Unknown") if versions else "Unknown"
+def build_civitai_frame(cache_buster=None):
+    suffix = f"?cf_reload={cache_buster}" if cache_buster else ""
     return (
-        f"{item.get('name', 'Untitled')} · "
-        f"{item.get('type', 'Model')} · "
-        f"{base_model} · ID {item.get('id')}"
+        f'<iframe src="{CIVITAI_BASE_URL}/{suffix}" '
+        'style="width:100%;height:92vh;border:1px solid #30363d;border-radius:12px;'
+        'box-shadow:0 4px 6px rgba(0,0,0,0.3);background:#0d1117;" '
+        'referrerpolicy="strict-origin-when-cross-origin" '
+        'allow="clipboard-read; clipboard-write; fullscreen" '
+        'loading="eager"></iframe>'
     )
 
 
-def _preview_html(item):
-    if not item:
-        return """
-        <div class="cf-empty">
-            <strong>Native Civitai Browser</strong><br>
-            Search Civitai without embedding its login page.
-        </div>
-        """
-
-    model_id = item.get("id")
-    name = html.escape(str(item.get("name", "Untitled")))
-    model_type = html.escape(str(item.get("type", "Unknown")))
-    creator = html.escape(str((item.get("creator") or {}).get("username", "Unknown")))
-    description = html.escape(strip_html(item.get("description", ""))[:700])
-
-    versions = item.get("modelVersions") or []
-    version = versions[0] if versions else {}
-    base_model = html.escape(str(version.get("baseModel", "Unknown")))
-    version_name = html.escape(str(version.get("name", "Unknown")))
-
-    image_url = ""
-    images = version.get("images") or []
-    if images:
-        candidate = str(images[0].get("url", ""))
-        if candidate.startswith("https://"):
-            image_url = html.escape(candidate, quote=True)
-
-    image_block = (
-        f'<img src="{image_url}" alt="{name}" class="cf-preview-image">'
-        if image_url
-        else '<div class="cf-no-image">No preview image</div>'
-    )
-    model_url = f"{CIVITAI_BASE_URL}/models/{model_id}"
-
-    return f"""
-    <div class="cf-model-card">
-        <div class="cf-preview-wrap">{image_block}</div>
-        <div class="cf-model-copy">
-            <div class="cf-model-kicker">{model_type} · {base_model}</div>
-            <h2>{name}</h2>
-            <div class="cf-model-meta">by {creator} · {version_name} · Model ID {model_id}</div>
-            <p>{description or "No description available."}</p>
-            <a href="{model_url}" target="_blank" rel="noopener noreferrer">Open model on Civitai ↗</a>
-        </div>
-    </div>
-    """
-
-
-def render_model_preview(selection):
-    with SEARCH_LOCK:
-        item = SEARCH_RESULTS.get(selection)
-    return _preview_html(item)
-
-
-def search_civitai(query, sort, period, include_nsfw):
-    params = {
-        "limit": 24,
-        "types": "LORA",
-        "sort": sort,
-        "period": period,
-        "nsfw": "true" if include_nsfw else "false",
-    }
-    if (query or "").strip():
-        params["query"] = query.strip()
-
-    api_key = get_api_key()
-
-    try:
-        response = requests.get(
-            f"{CIVITAI_API_URL}/models",
-            params=params,
-            headers=build_headers(api_key),
-            timeout=25,
-        )
-        if response.status_code in (401, 403):
-            message = (
-                "🔴 Civitai rejected the configured API key. "
-                "Update it in **Settings → CivitaiFlow Manager**."
-            )
-            return gr.update(choices=[], value=None), message, _preview_html(None)
-        if response.status_code != 200:
-            message = f"🔴 Search failed with HTTP {response.status_code}."
-            return gr.update(choices=[], value=None), message, _preview_html(None)
-
-        payload = response.json()
-        items = payload.get("items") or []
-    except (requests.RequestException, ValueError) as exc:
-        message = f"🔴 Search failed: `{html.escape(str(exc)[:140])}`"
-        return gr.update(choices=[], value=None), message, _preview_html(None)
-
-    choices = []
-    result_map = {}
-    for item in items:
-        if not item.get("id"):
-            continue
-        label = _model_choice_label(item)
-        choices.append(label)
-        result_map[label] = item
-
-    with SEARCH_LOCK:
-        SEARCH_RESULTS.clear()
-        SEARCH_RESULTS.update(result_map)
-
-    if not choices:
-        return (
-            gr.update(choices=[], value=None),
-            "🟡 No LoRA models matched the current filters.",
-            _preview_html(None),
-        )
-
-    auth_note = "authenticated" if api_key else "public"
-    status = f"🟢 Found **{len(choices)}** LoRA model(s) using {auth_note} Civitai browsing."
-    first_choice = choices[0]
-    return (
-        gr.update(choices=choices, value=first_choice),
-        status,
-        _preview_html(result_map[first_choice]),
-    )
-
-
-def download_selected_model(selection, threads):
-    with SEARCH_LOCK:
-        item = SEARCH_RESULTS.get(selection)
-
-    if not item:
-        return "🟡 Select a model from the native browser first."
-
-    queued = start_downloads([str(item["id"])], threads, force=True)
-    if queued:
-        return f"⬇️ Queued **{html.escape(str(item.get('name', item['id'])))}** for download."
-    return "🟡 Model was not queued."
+def reload_civitai_frame():
+    return build_civitai_frame(int(time.time()))
 
 
 def on_ui_tabs():
@@ -570,61 +442,25 @@ def on_ui_tabs():
         min-width: auto !important;
         padding: 0 10px !important;
     }
-    .cf-model-card {
-        min-height: 520px;
-        border: 1px solid #30363d;
-        border-radius: 12px;
-        overflow: hidden;
-        background: rgba(13, 17, 23, 0.35);
-    }
-    .cf-preview-wrap {
-        min-height: 330px;
-        max-height: 58vh;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        overflow: hidden;
-        background: #0d1117;
-    }
-    .cf-preview-image {
-        width: 100%;
-        height: 100%;
-        max-height: 58vh;
-        object-fit: contain;
-    }
-    .cf-no-image,
-    .cf-empty {
-        padding: 48px;
-        text-align: center;
-        color: #8b949e;
-    }
-    .cf-model-copy {
-        padding: 18px 20px 22px;
-    }
-    .cf-model-copy h2 {
-        margin: 4px 0 8px;
-    }
-    .cf-model-kicker,
-    .cf-model-meta {
-        color: #8b949e;
-        font-size: 0.9rem;
-    }
-    .cf-model-copy a {
-        font-weight: 600;
-    }
     """
 
     with gr.Blocks(analytics_enabled=False, css=custom_css) as cf_tab:
         timer = gr.Timer(1.5)
 
         with gr.Row():
-            with gr.Column(scale=2):
-                gr.Markdown("## 📡 CivitaiFlow v22.2")
+            with gr.Column(scale=1):
+                gr.Markdown("## 📡 CivitaiFlow v22.3")
+                gr.Markdown(
+                    "**Embedded Civitai is the primary workflow.** Google OAuth must be completed "
+                    "in a normal browser tab because Google blocks sign-in inside embedded frames."
+                )
                 api_status = gr.Markdown(initial_api_status())
 
                 with gr.Row():
                     btn_check_api = gr.Button("🔐 Check API", variant="secondary")
-                    btn_open_civitai = gr.Button("🌐 Open Civitai", variant="secondary")
+                    btn_open_civitai = gr.Button("🌐 Login / Open Civitai", variant="secondary")
+
+                btn_reload_frame = gr.Button("🔄 Reload Civitai Panel", variant="secondary")
 
                 with gr.Group():
                     with gr.Row(variant="panel"):
@@ -670,49 +506,10 @@ def on_ui_tabs():
                     elem_id="cf_terminal",
                 )
 
-                browser_action_status = gr.Markdown()
+                action_status = gr.Markdown()
 
             with gr.Column(scale=5):
-                gr.Markdown("## 🔎 Native Civitai Browser")
-                gr.Markdown(
-                    "Search the Civitai API directly. Login is opened in your normal browser "
-                    "instead of an iframe, so Google OAuth is not blocked."
-                )
-
-                with gr.Row():
-                    search_query = gr.Textbox(
-                        label="Search LoRAs",
-                        placeholder="Character, style, concept...",
-                    )
-                    btn_search = gr.Button("Search", variant="primary")
-
-                with gr.Row():
-                    search_sort = gr.Dropdown(
-                        choices=["Highest Rated", "Most Downloaded", "Newest"],
-                        value="Most Downloaded",
-                        label="Sort",
-                    )
-                    search_period = gr.Dropdown(
-                        choices=["AllTime", "Year", "Month", "Week", "Day"],
-                        value="AllTime",
-                        label="Period",
-                    )
-                    search_nsfw = gr.Checkbox(
-                        label="Include mature / NSFW results",
-                        value=False,
-                    )
-
-                search_status = gr.Markdown()
-                search_results = gr.Dropdown(
-                    choices=[],
-                    label="Search results",
-                    interactive=True,
-                )
-                btn_download_selected = gr.Button(
-                    "⬇️ Download selected LoRA",
-                    variant="primary",
-                )
-                model_preview = gr.HTML(_preview_html(None))
+                civitai_frame = gr.HTML(build_civitai_frame())
 
         timer.tick(
             fn=master_tick,
@@ -720,35 +517,11 @@ def on_ui_tabs():
             outputs=[url_box, log_box],
         )
         btn_clear.click(fn=reset_all, outputs=[url_box, log_box])
-        btn_retry.click(
-            fn=retry_failed,
-            inputs=[th_slider],
-            outputs=[browser_action_status],
-        )
-        btn_folder.click(fn=open_loras, outputs=[browser_action_status])
-        btn_open_civitai.click(fn=open_civitai, outputs=[browser_action_status])
+        btn_retry.click(fn=retry_failed, inputs=[th_slider], outputs=[action_status])
+        btn_folder.click(fn=open_loras, outputs=[action_status])
+        btn_open_civitai.click(fn=open_civitai, outputs=[action_status])
         btn_check_api.click(fn=check_api_status, outputs=[api_status])
-
-        btn_search.click(
-            fn=search_civitai,
-            inputs=[search_query, search_sort, search_period, search_nsfw],
-            outputs=[search_results, search_status, model_preview],
-        )
-        search_query.submit(
-            fn=search_civitai,
-            inputs=[search_query, search_sort, search_period, search_nsfw],
-            outputs=[search_results, search_status, model_preview],
-        )
-        search_results.change(
-            fn=render_model_preview,
-            inputs=[search_results],
-            outputs=[model_preview],
-        )
-        btn_download_selected.click(
-            fn=download_selected_model,
-            inputs=[search_results, th_slider],
-            outputs=[browser_action_status],
-        )
+        btn_reload_frame.click(fn=reload_civitai_frame, outputs=[civitai_frame])
 
     return [(cf_tab, "CivitaiFlow", "cf_tab")]
 
