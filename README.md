@@ -1,218 +1,287 @@
-# CivitaiFlow v22.4 — Control Deck Edition
+# CivitaiFlow
 
-> Browse Civitai inside Stable Diffusion WebUI Forge, capture model links from the clipboard, and download LoRAs automatically with API-authenticated transfers.
+> A Civitai-to-Forge acquisition bridge for Stable Diffusion WebUI Forge.
 
-CivitaiFlow keeps the **real Civitai website embedded inside Forge** as the main discovery experience. Around that panel it adds a compact control deck for Civitai API authentication, Sniper capture, automatic downloads, retry handling, metadata generation, previews, and LoRA organization.
+CivitaiFlow is not primarily an embedded web browser. Its real job is to remove the friction between **discovering a model on Civitai** and **having that model ready to use locally in Forge**.
 
-## What changed in v22.4
+The intended loop is:
 
-v22.4 focuses on two things: making API authentication obvious and making the extension feel like a finished product instead of a collection of utility buttons.
+```text
+Discover on Civitai
+      ↓
+Copy a model link
+      ↓
+CivitaiFlow captures it
+      ↓
+Resolve metadata + authenticated download
+      ↓
+Save model + preview + Forge metadata
+      ↓
+Ready in the local Forge model library
+```
 
-### New API Access card
+The embedded Civitai panel is a convenience layer around that loop. Sniper capture, API-authenticated transfers, download resilience, local organization, and Forge integration are the core of the extension.
 
-You no longer need to leave the CivitaiFlow tab and hunt through Forge settings just to connect the API.
+## Product goal
 
-The left panel now includes:
+CivitaiFlow should make model acquisition feel native to Forge:
 
-- masked **API key** input;
-- **Connect API** — validates the token against `GET /api/v1/me` and only saves it when valid;
-- **Verify** — checks the currently saved key;
-- **Get API Key ↗** — opens Civitai Settings in your normal browser;
-- **Disconnect** — clears the saved token from Forge;
-- connection status with the authenticated Civitai username and a masked token suffix.
+- browse Civitai without constantly switching context;
+- capture Civitai model links with minimal interaction;
+- authenticate downloads without exposing tokens in URLs;
+- download in the background with useful telemetry;
+- leave interrupted transfers as temporary files instead of fake-complete models;
+- create local preview and metadata files that Forge can use;
+- keep the workflow useful even when Civitai changes its website or browser policies.
 
-The token is persisted using Forge's own configuration system and is sent to Civitai as:
+## Discovery modes
+
+CivitaiFlow now treats discovery as a **multi-surface** problem instead of assuming one iframe will always work.
+
+### 1. Embedded Civitai — convenience mode
+
+The right side of the CivitaiFlow tab embeds `civitai.com` when the browser and Civitai allow it.
+
+This is the closest experience to the original CivitaiFlow concept, but it is inherently best-effort. Civitai controls its own framing headers, authentication flow, cookies, CSP, and website implementation. Those policies can change independently of this extension.
+
+### 2. Companion Window — authenticated fallback
+
+Use **Open Companion Window ↗** to open Civitai as a normal top-level window in the **same browser running Forge**.
+
+This is the recommended surface for:
+
+- Google/Civitai login;
+- browsing when the iframe is blocked or logged out;
+- account settings;
+- normal first-party cookies;
+- continuing the Sniper workflow without depending on iframe authentication.
+
+The companion window is still part of the same workflow: browse Civitai there, copy a model link, and CivitaiFlow continues capturing it from the Windows clipboard.
+
+When the companion window closes, CivitaiFlow attempts to reload the embedded panel. Whether the authenticated website session becomes visible inside the iframe still depends on browser/Civitai cookie and framing policy.
+
+### 3. Civitai API — download authentication
+
+The API connection is separate from the website session.
+
+CivitaiFlow sends the configured credential as:
 
 ```http
 Authorization: Bearer <CIVITAI_API_KEY>
 ```
 
-CivitaiFlow does not append your token to generated download URLs.
+The key is used for authenticated metadata and gated model downloads. It **does not create a browser cookie and does not log the embedded Civitai website into your account**.
 
-### Tuned interface
+## Quick start
 
-The old emoji-heavy dashboard has been replaced by a cleaner control deck:
-
-- custom monochrome CivitaiFlow mark;
-- compact version badge;
-- card-based layout;
-- restrained status indicators;
-- cleaner action labels;
-- improved spacing and hierarchy;
-- premium dark-panel treatment that stays compatible with Forge themes;
-- simplified activity terminal;
-- larger embedded Civitai workspace.
-
-## How authentication works
-
-There are **two different authentication contexts** in CivitaiFlow.
-
-### 1. Civitai website session
-
-This controls whether the embedded `civitai.com` website itself shows you as signed in.
-
-Google OAuth can reject sign-in attempts that happen inside an iframe, which is why you previously saw an HTTP 403 screen.
-
-For website login:
-
-1. Open Civitai in your normal browser.
-2. Sign in with Google/Civitai there.
-3. Return to Forge.
-4. Click **Reload Panel**.
-
-Browser privacy / third-party-cookie policy may still determine whether that website session is visible inside the embedded frame.
-
-### 2. Civitai API authentication
-
-This is what CivitaiFlow uses for authenticated metadata and gated/private downloads.
-
-It does **not** log the iframe into the website. It gives the extension an API credential.
-
-To connect it:
-
-1. In CivitaiFlow click **Get API Key ↗**.
-2. Sign in to Civitai if needed.
-3. In Civitai Settings create an API key.
-4. Copy the key.
-5. Return to Forge and paste it into **API key**.
-6. Click **Connect API**.
-7. CivitaiFlow calls `GET /api/v1/me`.
-8. If Civitai accepts the key, the extension saves it and shows **Connected as <username>**.
-
-You can still manage the same key from **Settings → CivitaiFlow Manager**.
-
-## Intended workflow
-
-The main CivitaiFlow loop remains simple:
-
-1. Browse Civitai in the embedded right-hand panel.
-2. Find a LoRA.
-3. Copy the model URL or link address.
-4. **Sniper capture** detects the clipboard entry.
-5. **Auto download** queues it automatically.
-6. Activity shows progress and transfer speed.
-7. CivitaiFlow writes the LoRA, preview image, and Forge metadata into the Forge LoRA directory.
-
-You can also paste `civitai.com/models/...` URLs or plain model IDs into the capture field.
-
-## Features
-
-- Embedded Civitai browser as the primary discovery UI.
-- Inline Civitai API connection and token persistence.
-- API identity verification via `/api/v1/me`.
-- Windows clipboard Sniper capture.
-- Zero-click automatic queueing.
-- Real concurrent workers with `ThreadPoolExecutor.submit(...)`.
-- `.safetensors.part` temporary files with atomic rename after successful completion.
-- Retry queue for failed downloads.
-- Windows-safe filenames and tag folders.
-- Forge JSON metadata with description, base model, trigger words, Civitai model ID, and version ID.
-- Primary preview-image download.
-- API tokens sent via Bearer authorization headers.
-- Smart activity cleanup: completed entries disappear quickly while failures remain visible longer.
-
-## Installation
-
-1. Open **Stable Diffusion WebUI Forge**.
-2. Go to **Extensions → Install from URL**.
-3. Paste:
+1. Install CivitaiFlow through **Forge → Extensions → Install from URL**.
+2. Use:
 
    `https://github.com/roninhub121/CivitaiFlow`
 
-4. Click **Install**.
-5. Open **Installed** and click **Apply and restart UI**.
+3. Apply the extension changes and restart Forge.
+4. Open **CivitaiFlow**.
+5. Keep **Sniper capture** and **Auto download** enabled.
+6. Configure API authentication from the **Civitai connection** card.
+7. Browse Civitai in the embedded panel or use **Open Companion Window ↗**.
+8. Copy a `civitai.com/models/...` link.
+9. CivitaiFlow queues the model automatically.
 
-For an existing installation, update CivitaiFlow from Forge and restart the UI.
+## API authentication
 
-## Downloads and files
+### Connect with a personal API key
 
-For each model CivitaiFlow:
+1. Click **Get API Key ↗**.
+2. Sign in to Civitai in the top-level browser window.
+3. Open the API Keys section on the Civitai Account page.
+4. Create a key and copy it.
+5. Return to Forge.
+6. Paste it into **API key**.
+7. Click **Connect API**.
 
-1. fetches metadata from the Civitai API;
-2. selects the first/latest model version returned by the API;
-3. locates the primary `.safetensors` file;
-4. creates a tag-based directory under Forge's LoRA folder;
-5. writes Forge-compatible JSON metadata;
-6. downloads a preview image when available;
-7. streams the model to `filename.safetensors.part`;
-8. renames it to `filename.safetensors` only after a successful transfer.
+Before saving the key, CivitaiFlow validates it against:
 
-This prevents interrupted downloads from looking like complete model files.
-
-## Concurrent downloads
-
-The **Concurrent downloads** slider accepts 1–10 workers.
-
-The implementation submits actual background workers:
-
-```python
-executor.submit(_download_worker, model_id, api_key)
+```http
+GET https://civitai.com/api/v1/me
 ```
 
-For normal use, 2–5 workers is a sensible range. If Civitai returns HTTP 429 or 503, lower concurrency and retry later.
+A successful connection shows the Civitai identity and only a masked suffix of the token.
+
+You can use **Verify** to re-test the saved key or **Disconnect** to remove it from Forge configuration.
+
+### Least privilege
+
+If Civitai offers scoped personal tokens, the current CivitaiFlow feature set only needs identity/model-reading capabilities for normal browsing and downloads. Prefer the smallest scope set that still allows `/api/v1/me`, model metadata, and model downloads.
+
+### Token storage
+
+The key is saved through Forge's own settings/configuration mechanism. CivitaiFlow masks it in the UI, but it does **not** add a separate encrypted secret store. Treat the Forge configuration directory as sensitive.
+
+See [Authentication design](docs/AUTHENTICATION.md) for the complete trust model and OAuth roadmap.
+
+## Why iframe login is unreliable
+
+There are two independent browser restrictions:
+
+1. **Google OAuth does not support arbitrary embedded user-agents/webviews for authorization.** A Google login flow reached from an iframe can fail with `403` / `disallowed_useragent`.
+2. **The embedded website controls whether it may be framed at all.** Headers such as `X-Frame-Options` or CSP `frame-ancestors` can prevent Civitai from rendering inside Forge regardless of our code.
+
+Even after logging in successfully in a normal browser window, modern browsers may block or partition third-party cookies inside cross-site iframes. An API key cannot convert an API session into a website cookie session.
+
+Because of that, CivitaiFlow does not try to scrape browser cookies, forge Civitai session cookies, strip security headers, or reverse-proxy the website to defeat framing policy.
+
+The stable design is:
+
+```text
+Embedded panel       → convenient discovery when allowed
+Companion window     → real website login + reliable browsing fallback
+Civitai API key      → authenticated metadata + downloads
+CivitaiFlow backend  → capture, transfer, metadata, organization
+```
+
+## Current feature set
+
+- Embedded Civitai browser when framing is permitted.
+- Same-browser companion window for login and fallback browsing.
+- Windows clipboard Sniper capture.
+- Zero-click auto queueing.
+- Civitai API-key verification through `/api/v1/me`.
+- Bearer-token authenticated requests.
+- Real concurrent downloads through `ThreadPoolExecutor.submit(...)`.
+- `.safetensors.part` temporary transfers with atomic rename on success.
+- Retry handling for failed transfers.
+- Download progress and speed telemetry.
+- Windows-safe local filenames.
+- Forge JSON metadata with description, base model, activation words, Civitai model ID, and version ID.
+- Primary Civitai preview-image download.
+- Tag-based LoRA organization.
+
+## Current scope and important limitations
+
+CivitaiFlow is currently optimized for **LoRA acquisition on Windows + Stable Diffusion WebUI Forge**.
+
+The codebase is intentionally small, but several areas are still product work rather than finished infrastructure:
+
+- the iframe is not a guaranteed integration contract with Civitai;
+- browser login and API authentication are separate sessions;
+- Sniper capture currently depends on Windows PowerShell `Get-Clipboard`;
+- the download engine currently targets the Forge LoRA directory;
+- model-type routing for checkpoints, VAEs, embeddings, etc. is not finished;
+- copied URLs that target a specific model version need stronger version-aware handling;
+- in-memory activity state is global to the Forge process and assumes a local/single-user installation;
+- post-download hash verification is not implemented yet.
+
+See [Architecture](docs/ARCHITECTURE.md) for the engineering audit and target design.
+
+## Download behavior
+
+For a captured model, CivitaiFlow currently:
+
+1. resolves the Civitai model through the REST API;
+2. selects a model version;
+3. locates a `.safetensors` file;
+4. creates the local target folder;
+5. writes Forge-compatible metadata;
+6. downloads a preview image when available;
+7. streams the model to `*.safetensors.part`;
+8. reports progress and transfer speed;
+9. atomically renames the temporary file after a successful transfer.
+
+If the process crashes before completion, an orphaned `.part` file can remain and may be deleted before retrying.
 
 ## Troubleshooting
 
-### Google returns HTTP 403 inside the embedded panel
+### Google returns 403 inside the embedded panel
 
-Use **Open Civitai in Browser ↗**, complete website login in the normal browser, return to Forge, then click **Reload Panel**.
+Do not authenticate Google inside the iframe. Use **Open Companion Window ↗**, sign in there, and continue browsing in that top-level window. Close it and CivitaiFlow will attempt to reload the embedded panel.
 
-### I am signed into Civitai but the iframe still looks logged out
+### The iframe is blank or reports that Civitai refused to connect
 
-That is a browser-cookie/session issue, not an API-key issue. Modern browser privacy controls can prevent third-party iframe cookies from being reused. API-authenticated CivitaiFlow downloads still work independently.
+Use **Open Companion Window ↗**. This means the site/browser framing policy is blocking embedded mode; it is not an API-key failure.
 
-### Connect API says the key is rejected
+### I am logged in in the companion window but the iframe still looks logged out
 
-Create a new API key in Civitai Settings and try again. CivitaiFlow does not save a token that fails `/api/v1/me` validation.
+That can happen when third-party cookies are blocked or partitioned. The website session may not be reusable inside a cross-site iframe. API-authenticated downloads still work independently.
+
+### API key is rejected
+
+Create a new key on the Civitai Account page, paste it into the CivitaiFlow connection card, and click **Connect API**.
 
 ### HTTP 401 / 403 during download
 
-The saved API key is missing, invalid, expired, or the asset requires authenticated access.
+The saved API key may be invalid, expired, missing the required scope, or the model may require authentication not available to the current credential.
 
-### HTTP 429
+### HTTP 429 / 503
 
-Civitai is rate-limiting requests. Lower **Concurrent downloads** and retry later.
+Reduce **Concurrent downloads**, wait briefly, and use **Retry failed**.
 
-### HTTP 503
+### Sniper capture does not detect links
 
-Civitai may be temporarily overloaded. Wait and use **Retry failed**.
-
-### Sniper capture is not detecting links
-
-Confirm PowerShell is available and Windows security policy/software is not blocking background `Get-Clipboard` calls.
-
-### A `.safetensors.part` file remains after a crash
-
-Forge/Python may have been terminated before cleanup. It is safe to remove an orphaned `.part` file before retrying.
+Confirm PowerShell is available and Windows security policy is not blocking background `Get-Clipboard` calls.
 
 ## Architecture
 
-CivitaiFlow v22.4 uses a hybrid boundary:
+CivitaiFlow is a small Forge extension with four logical layers:
 
-- **Civitai iframe** → primary discovery and browsing;
-- **normal browser** → Google OAuth, account management, and API-key creation;
-- **Civitai REST API** → metadata, identity verification, and downloads;
-- **Bearer API key** → authenticated/gated API access;
-- **PowerShell subprocess** → isolated Windows clipboard access;
-- **ThreadPoolExecutor** → concurrent model transfers;
-- **Forge / Gradio** → control deck and live activity.
+```text
+Discovery surfaces
+  ├─ embedded Civitai
+  └─ companion browser window
+          ↓
+Capture layer
+  └─ Windows clipboard / pasted URLs
+          ↓
+Acquisition engine
+  ├─ Civitai REST metadata
+  ├─ Bearer authentication
+  ├─ concurrent transfers
+  └─ retry / telemetry
+          ↓
+Forge integration
+  ├─ models/Lora
+  ├─ preview image
+  └─ JSON metadata
+```
+
+Detailed design notes: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+
+Authentication details: [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md)
 
 ## Roadmap
 
-- Better diagnostics for iframe session/cookie behavior.
-- Checkpoint routing to the correct Forge model directory.
-- VAE and Embedding routing.
-- Local installed-model gallery.
-- Hash verification after download.
-- Preview-image normalization/conversion.
-- Tensor.art integration.
+Priority direction for the next major release:
 
-## Release history
+- official Civitai OAuth Authorization Code + PKCE login once CivitaiFlow has its own registered OAuth client;
+- version-aware URL parsing using `modelVersionId`;
+- explicit model-type routing instead of assuming LoRA storage;
+- checkpoint / VAE / embedding support;
+- SHA-256 verification after downloads;
+- more durable download queue/state handling;
+- optional Windows secure credential storage;
+- better diagnostics for iframe/frame-policy failures;
+- local installed-model inventory and update detection;
+- optional Civitai companion/browser integration beyond clipboard capture.
 
-See [`CHANGELOG.md`](CHANGELOG.md).
+## Security philosophy
+
+CivitaiFlow should integrate with Civitai without defeating browser security boundaries.
+
+The project deliberately avoids:
+
+- scraping Google/Civitai credentials;
+- copying browser session cookies into Forge;
+- injecting API tokens into Civitai website pages;
+- stripping `X-Frame-Options` / CSP from Civitai responses;
+- reverse-proxying Civitai solely to bypass anti-framing controls.
+
+The preferred path is explicit browser authentication plus supported API credentials.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
 
 ## Credits
 
 Developed and maintained by **Ronin**.
 
-*In IT we trust.*
+Built for the Stable Diffusion WebUI Forge workflow.
