@@ -2,6 +2,73 @@
 
 All notable changes to CivitaiFlow are documented here.
 
+## [22.7] - 2026-09-03
+
+### Reliability & Lifecycle
+
+- Added `scripts/zzzz_civitaiflow_lifecycle.py` as a compatibility layer on top of Library Intelligence and the Model Update Center.
+- Added persistent transfer state under `<data-dir>/civitai-flow/download-queue.json`.
+- Active transfers from a previous Forge session are marked `interrupted` on startup rather than silently forgotten.
+- Added best-effort HTTP Range resume for existing `.part` files.
+- If a remote server ignores Range and returns a normal `200`, CivitaiFlow safely restarts that individual transfer instead of appending incompatible bytes.
+- Resumed transfers still require final SHA-256 verification before atomic promotion.
+
+### Disk safety
+
+- Added a configurable free-space reserve under **Forge → Settings → CivitaiFlow Manager**.
+- Default reserve is 5 GB.
+- Update records now include approximate remote file size and local free-space state when available.
+- Models that would violate the configured reserve are marked **Low disk** and are skipped by automatic update acquisition.
+- **Update all** now shows estimated pending download size/free space and keeps the same disk guard.
+
+### Update policies
+
+- Added per-model **Pin / Unpin** policy.
+- Pinned models remain visible in update review but are excluded from scheduled auto-update.
+- Manual **Update** still works for a pinned model because pin protects automation, not explicit user intent.
+- Added **Ignore** for a specific remote `modelVersionId`.
+- Ignoring one release does not permanently suppress future releases; a later Civitai version can appear on a future scan.
+- Policies persist under `<data-dir>/civitai-flow/lifecycle-state.json`.
+
+### Update review UX
+
+- Upgraded `javascript/update_center.js` from **Model updates** to **Model lifecycle**.
+- Added release-note/version-description review when supplied by Civitai.
+- Added per-model **Notes**, **Pin / Unpin**, **Ignore**, **Civitai ↗**, and **Update** actions.
+- Added file-size/base-model context, pinned badges, low-disk badges, pending-download totals and free-space context.
+- Added **Resume N** for resumable/error queue entries.
+- Updated the visible CivitaiFlow badge to `v22.7` from the lifecycle UI.
+
+### Forge refresh
+
+- Added best-effort automatic runtime inventory refresh after a successful verified install:
+  - LoRA → Forge networks inventory;
+  - Checkpoint → `sd_models.list_models()`;
+  - VAE → `sd_vae.refresh_vae_list()`;
+  - Textual Inversion → embedding database forced reload.
+- Refresh failure does not invalidate a verified model install; the result is recorded in lifecycle history.
+
+### Lifecycle history
+
+- Added append-only lifecycle history under `<data-dir>/civitai-flow/history.jsonl`.
+- Records install/update/resume/error/policy events with model/version IDs, paths, hashes, previous versions and Forge-refresh result when available.
+
+### Local API
+
+- Added loopback-only lifecycle endpoints:
+  - `GET /civitaiflow/api/lifecycle`;
+  - `GET /civitaiflow/api/history`;
+  - `POST /civitaiflow/api/policy`;
+  - `POST /civitaiflow/api/queue/resume`;
+  - `POST /civitaiflow/api/queue/forget-completed`.
+
+### Validation and documentation
+
+- CI now compiles all Python compatibility layers, including the 22.6 updater and 22.7 lifecycle manager.
+- CI now syntax-checks `javascript/update_center.js`.
+- Added `docs/LIFECYCLE.md` with queue/resume semantics, disk guard, pin/ignore behavior, release notes, Forge refresh, history, local API and remaining lifecycle roadmap.
+- Refreshed the main README around the full product loop: visual Civitai discovery → smart acquisition → clean local library → durable lifecycle management.
+
 ## [22.6] - 2026-09-03
 
 ### Model Update Center
