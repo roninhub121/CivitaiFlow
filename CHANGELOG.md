@@ -2,6 +2,52 @@
 
 All notable changes to CivitaiFlow are documented here.
 
+## [22.4] - 2026-09-03
+
+### Added
+
+- Inline **API Access** card inside the main CivitaiFlow tab.
+- Masked API-key input.
+- **Connect API** action that validates a candidate key against `GET /api/v1/me` before persisting it.
+- **Verify** action for the currently saved key.
+- **Get API Key** action that opens Civitai Settings in the normal browser.
+- **Disconnect** action that removes the saved Civitai API key from Forge configuration.
+- Authenticated username display and masked key suffix after a successful connection.
+- Inline explanation of the difference between Civitai website authentication and CivitaiFlow API authentication.
+- Custom CivitaiFlow SVG mark and version badge.
+- Card-based control deck styling and status indicators.
+
+### Changed
+
+- Reworked the main UI into three compact sections: **Civitai connection**, **Capture & download**, and **Activity**.
+- Removed most emoji-heavy button labels in favor of cleaner text actions and restrained symbols.
+- Increased the embedded Civitai workspace relative to the control column.
+- Refined spacing, borders, terminal styling, status presentation, and dark-theme behavior.
+- Simplified telemetry strings to `ACTIVE`, `DONE`, and `ERROR` style output instead of decorative emoji states.
+- Updated the CivitaiFlow user agent to `22.4`.
+- Renamed the Forge setting label to **Civitai API Key**.
+
+### Authentication
+
+- API keys are validated before being saved from the CivitaiFlow tab.
+- Valid keys are persisted through Forge's native `shared.opts.set(...)` + `shared.opts.save(...)` configuration path.
+- API authentication remains Bearer-token based:
+
+  `Authorization: Bearer <CIVITAI_API_KEY>`
+
+- The API key authenticates CivitaiFlow API/download requests; it does not replace the embedded website's browser session.
+- Google/Civitai website login remains a normal-browser operation because Google OAuth can reject iframe/webview authentication.
+
+### Kept
+
+- Embedded Civitai iframe as the primary discovery experience.
+- Sniper clipboard capture and Auto Download workflow.
+- Real concurrent worker submission through `ThreadPoolExecutor.submit(...)`.
+- `.safetensors.part` temporary transfers with atomic rename after success.
+- Improved 401/403 handling and unknown `Content-Length` handling.
+- Windows-safe model/tag filenames.
+- Forge metadata and preview-image generation.
+
 ## [22.3] - 2026-09-03
 
 ### Restored
