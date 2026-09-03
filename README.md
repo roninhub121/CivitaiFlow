@@ -2,9 +2,9 @@
 
 > **See it on Civitai. Send it to Forge. Keep the local library clean.**
 
-CivitaiFlow is a visual Civitai-to-Forge acquisition and local-library layer for **Stable Diffusion WebUI Forge**.
+CivitaiFlow is a visual Civitai-to-Forge acquisition and model-lifecycle layer for **Stable Diffusion WebUI Forge**.
 
-The product keeps the real Civitai browsing experience — previews, creators, versions, examples and model pages — while automating the repetitive work that happens after you decide you want an asset.
+It keeps the real Civitai discovery experience — previews, creators, versions, examples and model pages — while automating everything that becomes repetitive after you decide you want an asset.
 
 ```text
 Browse visually on Civitai
@@ -19,77 +19,188 @@ Already installed? ── yes → stop, no duplicate
         │
         no
         ↓
-Route → download → verify → metadata → register
+Disk guard → download/resume → SHA verify
         ↓
-Ready in Forge
+Route → metadata → register → refresh Forge
         ↓
-Future Civitai release?
+Lifecycle history
         ↓
-Update Center detects it
+Future release?
+        ↓
+Update Center → Pin / Ignore / Update / Auto-update
 ```
 
 ## Product principles
 
-### Visual discovery stays visual
+### 1. Visual discovery stays visual
 
-Civitai itself remains the discovery surface. CivitaiFlow does not try to replace the website with a reduced API gallery.
+Civitai itself remains the discovery surface. CivitaiFlow does not replace it with a reduced API gallery.
 
-You can browse through:
+Use:
 
-- **Embedded Civitai** inside the Forge tab when browser/Civitai framing policy allows it.
-- **Companion Window** as a normal top-level browser window for reliable Civitai/Google login and as a fallback when embedding is blocked.
+- **Embedded Civitai** inside Forge when browser/Civitai framing policy allows it.
+- **Companion Window** as the normal top-level Civitai experience for reliable login or when iframe behavior breaks.
 
-### Acquisition should be one action
+### 2. Acquisition should be one action
 
-The original workflow was:
+Original workflow:
 
 ```text
 See model → right-click → Copy link → Sniper → Auto-DL
 ```
 
-The optional **CivitaiFlow Browser Bridge** reduces that to:
+With the optional **CivitaiFlow Browser Bridge**:
 
 ```text
 See model → Send to Forge
 ```
 
-The Browser Bridge adds controls directly to real Civitai cards and model pages.
+### 3. The local library should know what it owns
 
-### The library should know what it already owns
-
-CivitaiFlow indexes local assets by:
+CivitaiFlow indexes assets using:
 
 - Civitai model ID;
 - Civitai `modelVersionId`;
 - SHA-256;
 - local path;
-- asset/model type.
+- model/asset type.
 
-That lets Civitai and Forge expose states such as:
+That lets CivitaiFlow distinguish:
 
 ```text
-[ Send to Forge ]
-[ Installed ]
-[ Update available ]
-[ Downloading 64% ]
-[ Verifying ]
+Send to Forge
+Installed
+Update available
+Downloading 64%
+Verifying
+Pinned
+Low disk
 ```
 
-### Updates should be safe
+### 4. Updates should be safe
 
-A newer checkpoint or LoRA is not automatically a better drop-in replacement for every workflow.
+A newer LoRA/checkpoint can change trigger words, recommended weight, base model assumptions or visual behavior.
 
-CivitaiFlow 22.6 can detect newer Civitai releases and optionally auto-download them, but automatic updates **keep the previous local version** by default.
+CivitaiFlow therefore treats auto-update as **automatic acquisition of a newer version**, not automatic destruction of the old one.
 
-No silent destructive replacement.
+**KEEP BOTH** remains the safe default.
+
+---
+
+# 22.7 — Reliability & Lifecycle
+
+22.7 turns the 22.5/22.6 acquisition engine into a more durable model lifecycle manager.
+
+## Persistent queue + resume
+
+Transfer state is persisted in:
+
+```text
+<data-dir>/civitai-flow/download-queue.json
+```
+
+Interrupted transfers keep their `.part` file and can resume with HTTP Range requests when the Civitai CDN supports them.
+
+```text
+Downloading 63%
+     ↓
+Forge closes / PC restarts
+     ↓
+CivitaiFlow sees interrupted queue item
+     ↓
+Range: bytes=<existing_size>-
+     ↓
+Resume
+     ↓
+SHA-256 verify before install
+```
+
+If the server does not support resume, CivitaiFlow safely restarts that transfer from byte zero rather than appending incompatible bytes.
+
+The lifecycle panel exposes **Resume N** when resumable/error queue items exist.
+
+## Disk-space protection
+
+Before a model is queued, CivitaiFlow estimates required space and preserves a configurable disk reserve.
+
+Default reserve:
+
+```text
+5 GB
+```
+
+The lifecycle UI can show:
+
+```text
+14 updates · 42.8 GB pending · 301.2 GB free
+```
+
+A model that would violate the reserve is marked **Low disk** and is not auto-queued.
+
+## Pin a model
+
+A pinned model can still be updated manually, but scheduled auto-update will leave it alone.
+
+```text
+Juggernaut XL
+local v9 → v11
+PINNED
+
+[ Notes ] [ Unpin ] [ Ignore ] [ Civitai ↗ ] [ Update ]
+```
+
+## Ignore one release
+
+**Ignore** suppresses only the currently offered Civitai version.
+
+If you ignore `v11` and the creator later publishes `v12`, the next scan can show `v12` again.
+
+## Release notes before update
+
+Update rows now carry version description/release context returned by the Civitai API and expose a compact **Notes** action before downloading.
+
+Rows can show:
+
+- local version(s);
+- latest Civitai version;
+- type;
+- base model;
+- approximate download size;
+- pin state;
+- disk state;
+- current transfer state;
+- direct Civitai link.
+
+## Forge auto-refresh
+
+After a verified install CivitaiFlow performs a best-effort Forge inventory refresh:
+
+| Asset | Refresh |
+| --- | --- |
+| LoRA | Forge network inventory |
+| Checkpoint | checkpoint model list |
+| VAE | VAE list |
+| Textual Inversion | embedding database |
+
+A refresh failure does not invalidate an otherwise good model download; the result is recorded in lifecycle history.
+
+## Lifecycle history
+
+Install/update/resume/error/policy events are appended to:
+
+```text
+<data-dir>/civitai-flow/history.jsonl
+```
+
+This becomes the foundation for a future full rollback/history UI.
+
+See [Lifecycle Manager](docs/LIFECYCLE.md).
 
 ---
 
 # 22.6 — Model Update Center
 
-22.6 turns the local Library Intelligence index into an update-aware model repository.
-
-The update scanner groups locally indexed files by Civitai model family, checks the latest downloadable version on Civitai, then compares the remote `modelVersionId` and SHA-256 with the local library.
+CivitaiFlow groups locally indexed files by Civitai model family, checks the latest downloadable version and compares the remote `modelVersionId`/SHA-256 with the local library.
 
 ```text
 Local model family
@@ -102,54 +213,12 @@ latest version/hash already local?
       └─ no  → UPDATE AVAILABLE
 ```
 
-The Forge panel now exposes a compact **Model updates** center:
+Available update modes under **Forge → Settings → CivitaiFlow Manager**:
 
-```text
-● Model updates · 14 available
-  Notify only · checked 2h ago · every 24h
-
-[ Review ] [ Scan ] [ Update all ]
-```
-
-Individual updates show the installed version(s), latest Civitai version and current queue/download state.
-
-## Update modes
-
-Configure them under **Forge → Settings → CivitaiFlow Manager**:
-
-- **Disabled** — no scheduled update checks.
-- **Notify only** — default; report newer versions without downloading automatically.
-- **Auto-download LoRAs (keep old)** — automatically acquire newer LoRA versions.
-- **Auto-download LoRAs + checkpoints (keep old)** — automatically acquire newer LoRAs and checkpoints.
-
-Additional settings control:
-
-- update-check interval;
-- update download concurrency;
-- maximum automatic updates per scan;
-- startup update scan.
-
-Automatic update batches use the same smart acquisition engine as **Send to Forge**:
-
-```text
-exact modelVersionId
-      ↓
-duplicate check
-      ↓
-type-aware routing
-      ↓
-*.part transfer
-      ↓
-SHA-256 verification
-      ↓
-collision-safe install
-      ↓
-preview + metadata
-      ↓
-register in local library
-```
-
-Existing versions are kept. If the new version would collide with a different local file, CivitaiFlow uses a `__v<modelVersionId>` suffix instead of overwriting different bytes.
+- **Disabled**
+- **Notify only** — default
+- **Auto-download LoRAs (keep old)**
+- **Auto-download LoRAs + checkpoints (keep old)**
 
 See [Model Updates](docs/UPDATES.md).
 
@@ -163,31 +232,21 @@ CivitaiFlow maintains an incremental local inventory in:
 <data-dir>/civitai-flow/library-index.json
 ```
 
-The first scan may need to SHA-256 hash every supported model file. Later scans reuse cached hashes for unchanged files.
+The first scan hashes supported model files. Later scans reuse cached hashes for unchanged files.
 
-For older/manual assets without CivitaiFlow sidecars, known SHA-256 values can be resolved through Civitai's public by-hash API so existing models can still be connected back to Civitai model/version IDs.
+For older/manual assets without CivitaiFlow metadata, SHA-256 can be resolved through Civitai's public by-hash API so many pre-existing models can still be connected back to their Civitai model/version IDs.
 
 ## Duplicate prevention
 
 Before a smart transfer starts, CivitaiFlow checks:
 
-1. exact remote SHA-256 against the local index;
+1. exact remote SHA-256;
 2. exact Civitai `modelVersionId` when known;
-3. the installed model family for update awareness.
+3. installed model family for update awareness.
 
-An exact match is not downloaded twice even if the local filename or folder differs.
+An exact file is not downloaded twice even when its filename or folder changed.
 
-## Version-aware capture
-
-A URL such as:
-
-```text
-https://civitai.com/models/123456?modelVersionId=987654
-```
-
-keeps `987654` through resolution and download instead of silently selecting another version.
-
-## Model routing
+## Type-aware routing
 
 | Civitai type | Forge location |
 | --- | --- |
@@ -196,11 +255,21 @@ keeps `987654` through resolution and download instead of silently selecting ano
 | VAE | `models/VAE` |
 | Textual Inversion | `<data-dir>/embeddings` |
 
-Unsupported types fail explicitly instead of being silently written into the LoRA directory.
+Unsupported types fail explicitly instead of silently landing in the LoRA directory.
 
-## Integrity verification
+## Integrity
 
-Smart downloads are written to `*.part`, hashed, compared with Civitai SHA-256 when supplied, and only then promoted to the final model filename.
+Smart transfers use:
+
+```text
+*.part
+  ↓
+stream / resume
+  ↓
+SHA-256 verification
+  ↓
+atomic rename
+```
 
 See [Library Intelligence](docs/LIBRARY-INTELLIGENCE.md).
 
@@ -210,12 +279,12 @@ See [Library Intelligence](docs/LIBRARY-INTELLIGENCE.md).
 
 The optional Manifest V3 Browser Bridge lives in [`browser-extension/`](browser-extension/).
 
-It enhances the real Civitai website instead of recreating it.
-
-When Forge is reachable locally:
+It enhances the **real Civitai website** with one-click local-library actions instead of recreating the site.
 
 ```text
 Civitai card
+    ↓
+Send to Forge
     ↓
 Browser Bridge
     ↓
@@ -224,31 +293,18 @@ Browser Bridge
 CivitaiFlow smart acquisition
 ```
 
-The bridge can show live local status while you browse:
-
-```text
-Send to Forge
-Installed
-Update available
-Queued
-Downloading 64%
-Verifying
-```
-
-If the local bridge cannot be reached, it falls back to copying the canonical Civitai URL so the original Windows Sniper workflow can continue.
+When the local bridge is unavailable, it falls back to copying the canonical Civitai URL so the original Windows Sniper workflow still works.
 
 The Browser Bridge never receives the Civitai API key.
 
-## Install in Edge
+## Install in Edge / Chrome
 
 1. Update CivitaiFlow and restart Forge.
-2. Open `edge://extensions`.
+2. Open `edge://extensions` or `chrome://extensions`.
 3. Enable **Developer mode**.
-4. Choose **Load unpacked** (or **Reload** if it is already installed).
-5. Select the local `CivitaiFlow/browser-extension` folder.
-6. Reload Civitai / the CivitaiFlow tab.
-
-Chrome uses the same process from `chrome://extensions`.
+4. Choose **Load unpacked** or **Reload**.
+5. Select `CivitaiFlow/browser-extension`.
+6. Reload Civitai.
 
 See [Browser Bridge documentation](browser-extension/README.md).
 
@@ -260,23 +316,40 @@ CivitaiFlow interacts with two separate authentication systems.
 
 ## Website session
 
-The Civitai website uses normal browser cookies and Civitai/Google login.
+The Civitai website uses browser cookies and its normal Civitai/Google login flow.
 
-Google OAuth can reject authentication inside embedded user-agents/iframes, and browser privacy rules can isolate third-party cookies.
+Google OAuth can reject authentication inside embedded user-agents/iframes and browser privacy rules can isolate third-party cookies.
 
-Use **Open Companion Window** when login inside the embedded view fails.
+Use **Open Companion Window** when login inside the iframe fails.
 
-## Civitai API credential
+## API credential
 
-The Python backend uses the configured Civitai API key for authenticated metadata and gated downloads:
+CivitaiFlow's Python backend uses the configured Civitai API key for authenticated metadata and gated downloads:
 
 ```http
 Authorization: Bearer <CIVITAI_API_KEY>
 ```
 
-The API key does not create a website cookie and cannot log the Civitai iframe into the website.
+The API key does not create a Civitai website cookie and cannot log the iframe into the website.
 
 See [Authentication](docs/AUTHENTICATION.md).
+
+---
+
+# Runtime state
+
+CivitaiFlow keeps model-management state under Forge's data directory:
+
+```text
+<data-dir>/civitai-flow/
+├── library-index.json
+├── update-cache.json
+├── lifecycle-state.json
+├── download-queue.json
+└── history.jsonl
+```
+
+These model-management files do **not** contain the Civitai API key.
 
 ---
 
@@ -284,23 +357,29 @@ See [Authentication](docs/AUTHENTICATION.md).
 
 - Real Civitai website as the visual discovery experience.
 - Embedded mode plus Companion Window fallback.
-- Optional one-click Browser Bridge on Civitai cards/pages.
-- Live installed/update/download states while browsing.
+- Optional one-click Browser Bridge.
+- Live Installed / Update / Downloading states while browsing.
 - Windows clipboard Sniper fallback.
 - Civitai API-key verification and Bearer authentication.
-- Version-aware `modelVersionId` resolution.
-- Incremental local SHA-256 model inventory.
-- Duplicate prevention across indexed model repositories.
+- Exact `modelVersionId` resolution.
+- Incremental SHA-256 local inventory.
+- Cross-folder duplicate prevention.
 - LoRA/checkpoint/VAE/Textual-Inversion routing.
-- Concurrent background downloads.
-- `*.part` temporary transfers.
-- SHA-256 verification before final rename.
-- Collision-safe multi-version storage.
-- Preview-image and Forge metadata generation.
+- Concurrent background transfers.
+- Persistent queue state.
+- Best-effort HTTP Range resume.
+- `.part` safety + SHA-256 verification.
+- Disk reserve guard.
+- Collision-safe multi-version installs.
+- Preview + Forge metadata generation.
+- Forge model inventory refresh after install.
 - Scheduled update discovery.
-- Manual per-model and **Update all** workflows.
-- Optional safe auto-download of newer LoRAs/checkpoints while keeping older versions.
-- Retry handling and live transfer telemetry.
+- Manual per-model / Update all.
+- Safe optional auto-update while keeping older versions.
+- Per-model Pin / Unpin.
+- Ignore a specific remote release.
+- Release notes inside update review.
+- Lifecycle history.
 
 ---
 
@@ -310,20 +389,19 @@ See [Authentication](docs/AUTHENTICATION.md).
 
    `https://github.com/roninhub121/CivitaiFlow`
 
-2. Apply changes and restart Forge.
+2. Apply changes and fully restart Forge.
 3. Open **CivitaiFlow**.
-4. Configure a Civitai API key when authenticated/gated access is needed.
+4. Configure a Civitai API key when authenticated/gated access is required.
 5. Let **Library Intelligence** finish the initial index.
-6. Keep **Sniper capture** and **Auto download** enabled if you want clipboard fallback.
-7. Optionally load the Browser Bridge for one-click Civitai controls.
-8. Browse visually and send models to Forge.
-9. Use **Model updates** to review newer releases or configure a safe auto-update policy in Settings.
+6. Optionally load/reload the Browser Bridge.
+7. Browse Civitai visually and use **Send to Forge**.
+8. Use **Model lifecycle** to scan/review updates, pin known-good versions, ignore bad releases and resume interrupted transfers.
 
 ---
 
 # Local API
 
-CivitaiFlow exposes loopback-only endpoints for the Browser Bridge and Forge UI:
+Loopback-only endpoints include:
 
 ```text
 GET  /civitaiflow/api/health
@@ -336,45 +414,46 @@ GET  /civitaiflow/api/updates
 POST /civitaiflow/api/updates/scan
 POST /civitaiflow/api/updates/apply
 POST /civitaiflow/api/updates/apply-all
+
+GET  /civitaiflow/api/lifecycle
+GET  /civitaiflow/api/history
+POST /civitaiflow/api/policy
+POST /civitaiflow/api/queue/resume
+POST /civitaiflow/api/queue/forget-completed
 ```
 
-These endpoints reject non-loopback clients. Running Forge with `--listen` does not intentionally turn CivitaiFlow into an unauthenticated LAN model-download/update service.
+These endpoints reject non-loopback clients through the shared local API guard.
 
 ---
 
 # Current limitations
 
 - Embedded Civitai remains dependent on Civitai/browser framing policy.
-- The Browser Bridge currently assumes local Forge on the default port `7860`.
-- Initial SHA-256 indexing can be disk-intensive for very large existing libraries.
-- Civitai card placement uses DOM heuristics and can require maintenance after a Civitai frontend redesign.
-- Sniper capture is Windows/PowerShell-specific.
-- Automatic updates currently keep old versions; archive/replace policies are not implemented yet.
-- There is no per-model update pin/ignore list yet.
-- Large checkpoint update batches do not yet estimate required free disk space.
-- The download queue does not yet persist/resume across Forge restarts.
-- Forge model inventories are not yet automatically refreshed after every successful install/update.
-- API keys are stored through Forge configuration rather than DPAPI/Credential Manager.
-- The Python core still uses compatibility layers around the original monolithic UI script and should be modularized in a future major release.
+- Browser Bridge currently assumes local Forge on the default port `7860`.
+- Initial SHA-256 indexing can be disk-intensive for very large libraries.
+- Civitai card placement still depends on DOM heuristics.
+- Sniper capture remains Windows/PowerShell-specific.
+- Resume depends on remote HTTP Range support; unsupported servers restart the individual transfer safely.
+- KEEP BOTH is still the only implemented update storage policy; Archive/Replace are future explicit opt-ins.
+- History is persisted but does not yet have a full rollback UI.
+- Queue pause/cancel/reorder controls are not implemented yet.
+- API keys still use Forge configuration rather than DPAPI/Credential Manager.
+- The Python core is still layered around the original monolithic script and should be modularized before a future major release.
 
 ---
 
 # Recommended roadmap
 
-1. **Forge refresh after install/update** — make newly acquired LoRAs/checkpoints immediately visible without manual refresh.
-2. **Persistent/resumable queue** — survive Forge restarts and resume large checkpoint downloads.
-3. **Per-model update pinning** — ignore/pin specific versions or model families.
-4. **Disk-space estimation** — especially before **Update all** and automatic checkpoint batches.
-5. **Update history + rollback helpers** — show what changed and make switching versions easier.
-6. **Archive/replace policy** — explicit opt-in alternatives to the default KEEP BOTH behavior.
-7. **Library Health** — duplicates, missing previews, orphan sidecars, stale entries and repair actions.
-8. **User-defined storage rules** — organize by type/base model/creator/custom templates.
-9. **Browser Bridge configuration** — explicit Forge URL/port and local bridge token for advanced setups.
-10. **Secure credential storage** — optional Windows DPAPI/Credential Manager.
-11. **Official Civitai OAuth + PKCE** — once CivitaiFlow has its own registered OAuth client.
-12. **Modular Python core** — split client, resolver, index, updates, queue, storage and metadata into dedicated modules.
-
-See [Architecture](docs/ARCHITECTURE.md) for the deeper engineering direction.
+1. **Library Health** — exact duplicates, missing previews, orphan sidecars, stale entries and repair actions.
+2. **History + rollback UI** — inspect prior installs and activate/archive older versions cleanly.
+3. **Queue controls** — pause, cancel, reorder and retry classification.
+4. **Archive old / Replace old** — explicit opt-in alternatives to KEEP BOTH.
+5. **File-variant preferences** — safetensors, FP16, pruned, primary-file rules.
+6. **User-defined storage rules** — type/base model/creator/custom templates.
+7. **Browser Bridge configuration** — Forge URL/port + local bridge token.
+8. **Secure credential storage** — Windows DPAPI/Credential Manager.
+9. **Official Civitai OAuth + PKCE** — after registering CivitaiFlow as its own OAuth client.
+10. **Modular Python core** — split client, resolver, library, queue, lifecycle, storage and metadata into a stable internal package.
 
 ---
 
@@ -384,6 +463,7 @@ See [Architecture](docs/ARCHITECTURE.md) for the deeper engineering direction.
 - [Authentication](docs/AUTHENTICATION.md)
 - [Library Intelligence](docs/LIBRARY-INTELLIGENCE.md)
 - [Model Updates](docs/UPDATES.md)
+- [Lifecycle Manager](docs/LIFECYCLE.md)
 - [Browser Bridge](browser-extension/README.md)
 - [Testing](docs/TESTING.md)
 - [Changelog](CHANGELOG.md)
