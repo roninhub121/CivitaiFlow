@@ -5,8 +5,10 @@
   const ENHANCED_ATTR = "data-civitai-flow-enhanced";
   const PAGE_BUTTON_ID = "civitai-flow-page-send";
   const STYLE_ID = "civitai-flow-browser-bridge-style";
+  const STATUS_TTL_MS = 2600;
+  const statusCache = new Map();
 
-  function canonicalModelUrl(value) {
+  function targetFromUrl(value) {
     try {
       const url = new URL(value, window.location.href);
       if (url.hostname !== "civitai.com" && !url.hostname.endsWith(".civitai.com")) return null;
@@ -17,7 +19,13 @@
       const canonical = new URL(`https://civitai.com/models/${match[1]}`);
       const versionId = url.searchParams.get("modelVersionId");
       if (versionId) canonical.searchParams.set("modelVersionId", versionId);
-      return canonical.toString();
+
+      return {
+        url: canonical.toString(),
+        modelId: match[1],
+        modelVersionId: versionId || null,
+        key: `${match[1]}:${versionId || "latest"}`,
+      };
     } catch (_) {
       return null;
     }
@@ -46,6 +54,22 @@
     }
   }
 
+  function bridgeMessage(message) {
+    return new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage(message, (response) => {
+          if (chrome.runtime.lastError) {
+            resolve({ ok: false, error: chrome.runtime.lastError.message });
+            return;
+          }
+          resolve(response || { ok: false, error: "No response from CivitaiFlow Browser Bridge" });
+        });
+      } catch (error) {
+        resolve({ ok: false, error: String(error) });
+      }
+    });
+  }
+
   function sendIcon() {
     return `
       <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -58,6 +82,21 @@
     return `
       <svg viewBox="0 0 20 20" aria-hidden="true">
         <path d="m5.2 10.3 3 3 6.6-6.6" />
+      </svg>`;
+  }
+
+  function updateIcon() {
+    return `
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M10 16.5V7.2m0 0L6.8 10.4M10 7.2l3.2 3.2" />
+        <path d="M4 5.2h12" />
+      </svg>`;
+  }
+
+  function spinnerIcon() {
+    return `
+      <svg class="civitai-flow-spin" viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M16 10a6 6 0 1 1-1.8-4.3" />
       </svg>`;
   }
 
@@ -86,7 +125,7 @@
         padding: 0 11px !important;
         border: 1px solid rgba(255,255,255,.18) !important;
         border-radius: 9px !important;
-        background: rgba(10, 13, 20, .84) !important;
+        background: rgba(10, 13, 20, .86) !important;
         color: #f8fafc !important;
         box-shadow: 0 8px 22px rgba(0,0,0,.28) !important;
         backdrop-filter: blur(10px) !important;
@@ -100,23 +139,42 @@
       }
 
       .civitai-flow-card-root:hover > .civitai-flow-send,
-      .civitai-flow-send:focus-visible {
+      .civitai-flow-send:focus-visible,
+      .civitai-flow-send[data-state="installed"],
+      .civitai-flow-send[data-state="update"],
+      .civitai-flow-send[data-state="downloading"],
+      .civitai-flow-send[data-state="queued"],
+      .civitai-flow-send[data-state="verifying"],
+      .civitai-flow-send[data-state="indexing"],
+      .civitai-flow-send[data-state="error"] {
         opacity: 1 !important;
         transform: translateX(-50%) translateY(0) !important;
       }
 
       .civitai-flow-send:hover {
-        background: rgba(249, 115, 22, .94) !important;
+        background: rgba(249, 115, 22, .96) !important;
         border-color: rgba(255,255,255,.28) !important;
       }
 
-      .civitai-flow-send[data-state="sent"] {
-        opacity: 1 !important;
+      .civitai-flow-send[data-state="installed"] {
         background: rgba(5, 150, 105, .94) !important;
       }
 
+      .civitai-flow-send[data-state="update"] {
+        background: rgba(217, 119, 6, .95) !important;
+      }
+
+      .civitai-flow-send[data-state="downloading"],
+      .civitai-flow-send[data-state="queued"],
+      .civitai-flow-send[data-state="verifying"] {
+        background: rgba(37, 99, 235, .94) !important;
+      }
+
+      .civitai-flow-send[data-state="indexing"] {
+        background: rgba(71, 85, 105, .94) !important;
+      }
+
       .civitai-flow-send[data-state="error"] {
-        opacity: 1 !important;
         background: rgba(190, 24, 93, .94) !important;
       }
 
@@ -130,6 +188,14 @@
         stroke-linecap: round !important;
         stroke-linejoin: round !important;
         flex: 0 0 auto !important;
+      }
+
+      .civitai-flow-spin {
+        animation: civitai-flow-spin .9s linear infinite !important;
+      }
+
+      @keyframes civitai-flow-spin {
+        to { transform: rotate(360deg); }
       }
 
       #${PAGE_BUTTON_ID} {
@@ -155,17 +221,13 @@
         cursor: pointer !important;
       }
 
-      #${PAGE_BUTTON_ID}:hover {
-        background: rgb(234, 88, 12) !important;
-      }
-
-      #${PAGE_BUTTON_ID}[data-state="sent"] {
-        background: rgb(5, 150, 105) !important;
-      }
-
-      #${PAGE_BUTTON_ID}[data-state="error"] {
-        background: rgb(190, 24, 93) !important;
-      }
+      #${PAGE_BUTTON_ID}[data-state="installed"] { background: rgb(5, 150, 105) !important; }
+      #${PAGE_BUTTON_ID}[data-state="update"] { background: rgb(217, 119, 6) !important; }
+      #${PAGE_BUTTON_ID}[data-state="downloading"],
+      #${PAGE_BUTTON_ID}[data-state="queued"],
+      #${PAGE_BUTTON_ID}[data-state="verifying"] { background: rgb(37, 99, 235) !important; }
+      #${PAGE_BUTTON_ID}[data-state="indexing"] { background: rgb(71, 85, 105) !important; }
+      #${PAGE_BUTTON_ID}[data-state="error"] { background: rgb(190, 24, 93) !important; }
 
       @media (hover: none) {
         .civitai-flow-send {
@@ -202,26 +264,113 @@
     return anchor.parentElement instanceof HTMLElement ? anchor.parentElement : null;
   }
 
-  function setButtonState(button, state, label) {
-    button.dataset.state = state;
-    button.innerHTML = `${state === "sent" ? checkIcon() : sendIcon()}<span>${label}</span>`;
+  function statePresentation(state, data = {}) {
+    if (state === "installed") return { icon: checkIcon(), label: "Installed" };
+    if (state === "update") return { icon: updateIcon(), label: "Update available" };
+    if (state === "queued") return { icon: spinnerIcon(), label: "Queued" };
+    if (state === "verifying") return { icon: spinnerIcon(), label: "Verifying" };
+    if (state === "indexing") return { icon: spinnerIcon(), label: "Indexing library" };
+    if (state === "downloading") {
+      const progress = Number(data.progress);
+      return {
+        icon: spinnerIcon(),
+        label: Number.isFinite(progress) ? `Downloading ${Math.round(progress)}%` : "Downloading",
+      };
+    }
+    if (state === "error") return { icon: sendIcon(), label: "Retry in Forge" };
+    return { icon: sendIcon(), label: "Send to Forge" };
   }
 
-  async function capture(button, url) {
-    setButtonState(button, "working", "Sending…");
-    const copied = await writeClipboard(url);
+  function setButtonState(button, state, data = {}) {
+    const presentation = statePresentation(state, data);
+    button.dataset.state = state || "available";
+    button.innerHTML = `${presentation.icon}<span>${presentation.label}</span>`;
 
-    if (copied) {
-      setButtonState(button, "sent", "Sent to Forge");
-      window.setTimeout(() => {
-        if (button.isConnected) setButtonState(button, "idle", "Send to Forge");
-      }, 1400);
-    } else {
-      setButtonState(button, "error", "Copy failed");
-      window.setTimeout(() => {
-        if (button.isConnected) setButtonState(button, "idle", "Send to Forge");
-      }, 1800);
+    if (data.path) button.title = `Installed locally: ${data.path}`;
+    else if (state === "update") button.title = "A different local version is installed. Click to send the current/latest version to Forge.";
+    else if (state === "indexing") button.title = "CivitaiFlow is building the SHA-256 library index. Downloads are held until the index is ready.";
+    else button.title = "Send this model directly to the local CivitaiFlow service. Clipboard/Sniper is used only as a fallback.";
+  }
+
+  function buttonTarget(button) {
+    return targetFromUrl(button.dataset.modelUrl || window.location.href);
+  }
+
+  async function getStatus(target, force = false) {
+    if (!target) return null;
+    const cached = statusCache.get(target.key);
+    const now = Date.now();
+    if (!force && cached && now - cached.time < STATUS_TTL_MS) return cached.data;
+
+    const response = await bridgeMessage({
+      type: "civitaiFlowStatus",
+      modelId: target.modelId,
+      modelVersionId: target.modelVersionId,
+    });
+
+    if (!response.ok || !response.data) return null;
+    statusCache.set(target.key, { time: now, data: response.data });
+    return response.data;
+  }
+
+  async function refreshStatus(button, force = false) {
+    if (!button || !button.isConnected) return;
+    const target = buttonTarget(button);
+    if (!target) return;
+
+    const data = await getStatus(target, force);
+    if (!data || !button.isConnected) return;
+    setButtonState(button, data.state || "available", data);
+  }
+
+  async function fallbackToSniper(button, target) {
+    const copied = await writeClipboard(target.url);
+    if (!copied) {
+      setButtonState(button, "error", { error: "Clipboard write failed" });
+      return;
     }
+
+    button.dataset.state = "queued";
+    button.innerHTML = `${checkIcon()}<span>Sent via Sniper</span>`;
+    window.setTimeout(() => void refreshStatus(button, true), 1400);
+  }
+
+  async function capture(button) {
+    const target = buttonTarget(button);
+    if (!target) return;
+
+    const existingStatus = await getStatus(target, true);
+    if (existingStatus && existingStatus.state === "installed") {
+      setButtonState(button, "installed", existingStatus);
+      return;
+    }
+
+    setButtonState(button, "queued", { label: "Sending" });
+    const response = await bridgeMessage({
+      type: "civitaiFlowCapture",
+      url: target.url,
+    });
+
+    if (!response.ok || !response.data) {
+      await fallbackToSniper(button, target);
+      return;
+    }
+
+    const data = response.data;
+    statusCache.set(target.key, { time: Date.now(), data });
+    setButtonState(button, data.state || "queued", data);
+
+    if (["queued", "downloading", "verifying"].includes(data.state)) {
+      window.setTimeout(() => void refreshStatus(button, true), 650);
+    }
+  }
+
+  function configureButton(button, target) {
+    button.dataset.modelUrl = target.url;
+    button.dataset.modelId = target.modelId;
+    if (target.modelVersionId) button.dataset.modelVersionId = target.modelVersionId;
+    else delete button.dataset.modelVersionId;
+    setButtonState(button, "available");
   }
 
   function enhanceCards() {
@@ -230,62 +379,79 @@
 
     for (const anchor of links) {
       if (!(anchor instanceof HTMLAnchorElement)) continue;
-      const url = canonicalModelUrl(anchor.href);
-      if (!url) continue;
+      const target = targetFromUrl(anchor.href);
+      if (!target) continue;
 
       const root = findCardRoot(anchor);
-      if (!root || seenRoots.has(root) || root.hasAttribute(ENHANCED_ATTR)) continue;
+      if (!root || seenRoots.has(root)) continue;
       seenRoots.add(root);
 
       const rect = root.getBoundingClientRect();
       if (rect.width < 150 || rect.height < 150) continue;
 
-      root.setAttribute(ENHANCED_ATTR, "1");
-      root.classList.add("civitai-flow-card-root");
+      let button = root.querySelector(":scope > .civitai-flow-send");
+      if (!button) {
+        root.setAttribute(ENHANCED_ATTR, "1");
+        root.classList.add("civitai-flow-card-root");
 
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "civitai-flow-send";
-      button.title = "Send this model to CivitaiFlow. This copies the model URL so Sniper capture can queue it immediately.";
-      setButtonState(button, "idle", "Send to Forge");
+        button = document.createElement("button");
+        button.type = "button";
+        button.className = "civitai-flow-send";
+        button.addEventListener(
+          "click",
+          (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+            void capture(button);
+          },
+          true
+        );
+        root.appendChild(button);
+      }
 
-      button.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation();
-        void capture(button, url);
-      }, true);
-
-      root.appendChild(button);
+      if (button.dataset.modelUrl !== target.url) configureButton(button, target);
+      void refreshStatus(button);
     }
   }
 
   function enhanceModelPage() {
-    const url = canonicalModelUrl(window.location.href);
+    const target = targetFromUrl(window.location.href);
     const existing = document.getElementById(PAGE_BUTTON_ID);
 
-    if (!url) {
+    if (!target) {
       if (existing) existing.remove();
       return;
     }
 
-    if (existing) {
-      existing.dataset.modelUrl = url;
-      return;
+    let button = existing;
+    if (!button) {
+      button = document.createElement("button");
+      button.id = PAGE_BUTTON_ID;
+      button.type = "button";
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void capture(button);
+      });
+      document.documentElement.appendChild(button);
     }
 
-    const button = document.createElement("button");
-    button.id = PAGE_BUTTON_ID;
-    button.type = "button";
-    button.dataset.modelUrl = url;
-    button.title = "Send the current Civitai model to CivitaiFlow";
-    setButtonState(button, "idle", "Send to Forge");
-    button.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      void capture(button, button.dataset.modelUrl || url);
-    });
-    document.documentElement.appendChild(button);
+    if (button.dataset.modelUrl !== target.url) configureButton(button, target);
+    void refreshStatus(button);
+  }
+
+  function isVisible(button) {
+    const rect = button.getBoundingClientRect();
+    return rect.bottom >= 0 && rect.top <= window.innerHeight && rect.right >= 0 && rect.left <= window.innerWidth;
+  }
+
+  function refreshVisibleStatuses() {
+    if (document.hidden) return;
+    const buttons = document.querySelectorAll(`.civitai-flow-send, #${PAGE_BUTTON_ID}`);
+    for (const button of buttons) {
+      if (isVisible(button)) void refreshStatus(button);
+    }
   }
 
   let scheduled = false;
@@ -305,6 +471,12 @@
 
   window.addEventListener("popstate", scheduleScan);
   window.addEventListener("hashchange", scheduleScan);
+  window.addEventListener("focus", () => {
+    statusCache.clear();
+    scheduleScan();
+    refreshVisibleStatuses();
+  });
 
+  window.setInterval(refreshVisibleStatuses, 2500);
   scheduleScan();
 })();
