@@ -2,6 +2,25 @@
 
 All notable changes to CivitaiFlow are documented here.
 
+## [22.4.2] - 2026-09-03
+
+### Added
+
+- Added the optional `browser-extension/` **CivitaiFlow Browser Bridge** for Chrome and Microsoft Edge.
+- Added one-click **Send to Forge** controls directly on Civitai model cards.
+- Added a persistent **Send to Forge** action on Civitai model detail pages.
+- The Browser Bridge runs on `https://civitai.com/*` with `all_frames: true`, so it can enhance both the embedded Civitai view and the top-level Companion Window when the browser permits the page to render.
+- Successful button clicks copy the canonical Civitai model URL to the clipboard so the existing Sniper capture + Auto Download pipeline is reused unchanged.
+- `modelVersionId` is preserved when it is already present in the source URL.
+- Added visual `Sent to Forge` and `Copy failed` states with lightweight SVG icons.
+- Added `browser-extension/README.md` with Edge/Chrome installation, behavior, security model, and limitations.
+
+### Architecture
+
+- Per-card controls are implemented as an explicit browser content script rather than attempting to reach into the cross-origin Civitai iframe from Forge JavaScript.
+- This avoids reverse-proxying Civitai, stripping frame/CSP protections, copying session cookies, or creating a second downloader.
+- The browser bridge is intentionally only a capture UX layer; the Forge extension remains authoritative for metadata resolution, duplicate checks, downloads, telemetry, and local organization.
+
 ## [22.4.1] - 2026-09-03
 
 ### Added
