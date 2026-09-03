@@ -8,6 +8,11 @@
         return typeof gradioApp === "function" ? gradioApp() : document;
     }
 
+    function refreshVersionBadge() {
+        const badge = root().querySelector(".cf-version");
+        if (badge && badge.textContent.trim() !== "v22.5") badge.textContent = "v22.5";
+    }
+
     function ensureStyles() {
         if (document.getElementById(STYLE_ID)) return;
         const style = document.createElement("style");
@@ -67,6 +72,7 @@
     }
 
     function ensureWidget() {
+        refreshVersionBadge();
         const card = root().querySelector("#cf_connection_card");
         if (!card) return null;
         let widget = root().querySelector(`#${WIDGET_ID}`);
@@ -103,6 +109,7 @@
     }
 
     async function refreshWidget() {
+        refreshVersionBadge();
         const widget = ensureWidget();
         if (!widget) return;
         const text = widget.querySelector(".cf-library-text");
@@ -132,6 +139,7 @@
     }
 
     function bind() {
+        refreshVersionBadge();
         ensureWidget();
         void refreshWidget();
     }
