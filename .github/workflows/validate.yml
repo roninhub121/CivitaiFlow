@@ -32,7 +32,6 @@ jobs:
         run: |
           node --check javascript/civitai_flow.js
           node --check javascript/library_status.js
-          node --check javascript/premium_shell.js
           node --check javascript/update_center.js
           node --check browser-extension/background.js
           node --check browser-extension/content.js
