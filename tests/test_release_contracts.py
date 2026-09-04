@@ -5,7 +5,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE = "22.7.1"
+RELEASE = "22.7.2"
 
 
 def read(relative_path):
@@ -15,31 +15,36 @@ def read(relative_path):
 class ReleaseContractTests(unittest.TestCase):
     def test_product_release_is_consistent_between_runtime_layers(self):
         python_release = read("scripts/zzzzz_civitaiflow_release.py")
-        browser_shell = read("javascript/premium_shell.js")
+        browser_runtime = read("javascript/civitai_flow.js")
         self.assertIn(f'CIVITAIFLOW_VERSION = "{RELEASE}"', python_release)
-        self.assertIn(f'const RELEASE_VERSION = "{RELEASE}";', browser_shell)
+        self.assertIn(f'const RELEASE_VERSION = "{RELEASE}";', browser_runtime)
 
     def test_stale_library_badge_override_is_removed(self):
         library_status = read("javascript/library_status.js")
         self.assertNotIn("v22.5", library_status)
         self.assertNotIn("refreshVersionBadge", library_status)
 
-    def test_premium_shell_has_critical_dimension_guards(self):
-        shell = read("javascript/premium_shell.js")
+    def test_proven_browser_script_owns_critical_runtime_shell(self):
+        runtime = read("javascript/civitai_flow.js")
         for contract in (
+            "cf-runtime-shell-style",
             ".cf-brand-mark svg",
             ".cf-frame-shell iframe",
             "#cf_browser_column",
-            "#cf_browser_stage",
+            "#cf_shell_row",
             "enforceCriticalDimensions",
             "min-height: 640px",
+            "window.setInterval(bind, 1000)",
         ):
-            self.assertIn(contract, shell)
+            self.assertIn(contract, runtime)
 
-    def test_release_fallback_uses_current_civitai_account_route(self):
+    def test_release_fallback_has_inline_logo_and_iframe_guards(self):
         release_module = read("scripts/zzzzz_civitaiflow_release.py")
         self.assertIn('/user/account', release_module)
         self.assertNotIn('/user/settings', release_module)
+        self.assertIn('width:30px;height:30px', release_module)
+        self.assertIn('width="100%" height="100%"', release_module)
+        self.assertIn('min-height:640px', release_module)
         self.assertIn(f"CivitaiFlow/{{CIVITAIFLOW_VERSION}}", release_module)
 
     def test_browser_bridge_discovers_common_forge_ports(self):
@@ -59,9 +64,15 @@ class ReleaseContractTests(unittest.TestCase):
         ]
         self.assertEqual(scripts, sorted(scripts))
 
-    def test_release_endpoint_is_declared(self):
+    def test_release_endpoint_declares_runtime_shell_v2(self):
         release_module = read("scripts/zzzzz_civitaiflow_release.py")
         self.assertRegex(release_module, re.escape('@app.get("/civitaiflow/api/release")'))
+        self.assertIn('"interface": "runtime-shell-v2"', release_module)
+        self.assertIn('"runtimeScript": "javascript/civitai_flow.js"', release_module)
+
+    def test_legacy_duplicate_premium_shell_is_not_required(self):
+        workflow = read(".github/workflows/validate.yml")
+        self.assertNotIn("javascript/premium_shell.js", workflow)
 
 
 if __name__ == "__main__":

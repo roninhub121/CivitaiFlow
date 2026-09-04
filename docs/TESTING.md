@@ -13,50 +13,76 @@ A release is not considered verified only because Python and JavaScript parse. T
 
 `.github/workflows/validate.yml` checks:
 
-- Python 3.10 compilation for all Forge extension sources, including the release compatibility layer;
-- JavaScript syntax for all Forge-side and Browser Bridge scripts, including the premium shell;
+- Python 3.10 compilation for all Forge extension sources;
+- JavaScript syntax for the Forge runtime shell, lifecycle UI and Browser Bridge;
 - Browser Bridge `manifest.json` JSON validity;
 - dependency-light release-contract tests under `tests/`.
 
-The release-contract suite specifically guards the failures that caused the 22.7.1 stabilization work: stale version badges, missing critical iframe/logo sizing, obsolete Civitai account routing, and Browser Bridge port assumptions.
+22.7.2 specifically guards the regression shown in Forge where the CivitaiFlow logo rendered at page scale while the embedded Civitai iframe stayed near the browser default size.
 
-## Required local 22.7.1 smoke test
+## Required local 22.7.2 smoke test
 
-### 1. Clean Forge restart
+### 1. Verify the actual checkout first
 
-- Update CivitaiFlow from Git.
-- Stop Forge completely; do not rely on a tab refresh alone.
-- Start Forge again.
-- Hard-refresh the browser once after Forge is ready.
-- Open **CivitaiFlow**.
+From the extension folder:
+
+```powershell
+git status --short --branch
+git rev-parse --short HEAD
+git log -1 --oneline
+```
+
+The runtime must be using the checkout you just updated. A stale extension copy elsewhere under Forge can look identical while executing older files.
+
+### 2. Clean Forge restart
+
+- update CivitaiFlow from Git;
+- stop Forge completely;
+- start Forge again;
+- hard-refresh the browser once after Forge is ready;
+- open **CivitaiFlow**.
 
 Expected:
 
-- visible release badge: `v22.7.1`;
+- visible release badge: `v22.7.2`;
 - compact CivitaiFlow mark, never a page-sized SVG;
-- left control rail approximately 340–410 px on desktop;
-- embedded Civitai workspace consumes the remaining width;
-- iframe height is workstation-sized rather than the browser default ~300×150 surface;
+- left control rail approximately 340–400 px on desktop;
+- embedded Civitai consumes the remaining workspace width;
+- iframe height is workstation-sized rather than a default ~300×150 surface;
 - **Library & lifecycle** appears as its own runtime card when those widgets are available.
 
-### 2. Responsive shell
+### 3. Runtime-shell ownership
 
-Validate at three useful widths:
+`javascript/civitai_flow.js` is the canonical browser shell in 22.7.2.
 
-- desktop / ultrawide: sidebar + browser workspace side-by-side;
-- medium window: controls can reflow while the browser remains full-width;
-- narrow window: one-column stack without horizontal page overflow.
+This is intentional: that script was already proven to load in the broken Forge runtime because its Companion/Reload toolbar was visible even when nested Gradio CSS was missing. The same proven execution path now owns:
 
-The premium shell is deliberately injected from `javascript/premium_shell.js` because some Forge/Gradio combinations ignore CSS supplied by nested `gr.Blocks(css=...)`. Critical logo and iframe dimensions also have a Python-side inline fallback in the final release layer.
+- critical inline logo dimensions;
+- critical iframe width/height;
+- release badge healing;
+- desktop/medium/mobile layout marking;
+- premium card and typography styling;
+- Companion/Reload toolbar;
+- Library & lifecycle host placement.
 
-### 3. Embedded browser and Companion fallback
+The separate `javascript/premium_shell.js` compatibility experiment was removed to avoid two self-healing UI loops fighting over the same DOM.
+
+### 4. Responsive shell
+
+Validate at three widths:
+
+- desktop / ultrawide: control rail + browser workspace side-by-side;
+- medium: controls reflow while browser remains full-width;
+- narrow: one-column stack without horizontal page overflow.
+
+### 5. Embedded browser and Companion fallback
 
 - Confirm **Reload** refreshes the embedded Civitai surface.
 - Open **Companion** and confirm Civitai opens as a normal top-level browser window.
 - Use Companion for Google/Civitai website authentication when embedded authentication is rejected by browser/OAuth policy.
-- Closing the Companion window should trigger a best-effort embedded reload.
+- Closing Companion should trigger a best-effort embedded reload.
 
-### 4. API authentication
+### 6. API authentication
 
 - Open **Get API Key ↗** and confirm it resolves to the current Civitai account page.
 - Create/copy a personal API key if needed.
@@ -72,16 +98,16 @@ API authentication active
 
 The Browser Bridge must never request, expose, or persist the API key itself.
 
-### 5. First library index
+### 7. Library Intelligence
 
 - Wait for `Library indexing` to transition to an indexed asset count.
 - Confirm LoRA and checkpoint counts are plausible.
 - Click **Reindex** and confirm a new scan starts without freezing Forge.
-- Confirm the library widget stays inside **Library & lifecycle**, not inside the API credential controls.
+- Confirm the library widget stays inside **Library & lifecycle**.
 
-### 6. Existing-model recognition
+### 8. Existing-model recognition
 
-Choose a Civitai model that is already present locally.
+Choose a Civitai model already present locally.
 
 Expected Browser Bridge state:
 
@@ -91,11 +117,11 @@ Installed
 
 Clicking the installed control must not create another model file.
 
-### 7. New-version recognition
+### 9. New-version recognition
 
 Choose a Civitai model for which an older local version exists.
 
-Expected state when the remote/current target differs:
+Expected:
 
 ```text
 Update available
@@ -103,7 +129,7 @@ Update available
 
 Sending it to Forge should preserve the older different file rather than overwrite it blindly.
 
-### 8. New model transfer
+### 10. New model transfer
 
 Choose a small test LoRA that is not installed.
 
@@ -119,31 +145,31 @@ Send to Forge
 
 Confirm the final model is not left with a `.part` suffix.
 
-### 9. Resume regression
+### 11. Resume regression
 
-- Start a sufficiently large model transfer.
+- Start a sufficiently large transfer.
 - Stop Forge while the `.part` file exists.
 - Restart Forge.
 
 Expected:
 
-- the interrupted queue item becomes resumable;
+- interrupted queue item becomes resumable;
 - CivitaiFlow attempts HTTP Range resume when supported;
-- if the server does not honor Range, that transfer restarts safely rather than appending incompatible bytes;
+- if Range is ignored, that transfer restarts safely;
 - SHA-256 verification still occurs before install.
 
-### 10. Hash verification and deduplication
+### 12. Hash verification and deduplication
 
 After a successful transfer:
 
-- inspect the generated JSON sidecar;
-- confirm Civitai model ID, version ID, model type, source filename and SHA-256 are recorded;
+- inspect the JSON sidecar;
+- confirm model ID, version ID, model type, source filename and SHA-256;
 - re-send the same model;
-- confirm CivitaiFlow returns `Installed` without downloading the bytes again.
+- confirm CivitaiFlow reports `Installed` without redownloading bytes.
 
-### 11. Type-aware routing
+### 13. Type-aware routing
 
-Validate at least LoRA and checkpoint routing when practical:
+Validate at least:
 
 ```text
 LoRA       → models/Lora
@@ -152,32 +178,47 @@ Checkpoint → models/Stable-diffusion
 
 Unsupported model types should fail explicitly instead of silently landing in the LoRA folder.
 
-### 12. Browser Bridge direct mode
+### 14. Browser Bridge direct mode
 
 Reload `browser-extension/` in Edge/Chrome after an extension update.
 
-CivitaiFlow Browser Bridge 0.3.0 discovers common local Forge ports `7860` through `7863` on both `127.0.0.1` and `localhost`.
+Browser Bridge 0.3.0 discovers local Forge ports `7860` through `7863` on both `127.0.0.1` and `localhost`.
 
 - open Civitai;
 - confirm model cards show CivitaiFlow state;
 - click **Send to Forge**;
-- confirm the model queues without a manual clipboard copy;
-- if Forge uses one of the supported ports, the bridge should remember the working base for later requests.
+- confirm the model queues without a manual clipboard copy.
 
-### 13. Sniper fallback
+### 15. Release diagnostic
 
-Stop Forge or otherwise make the loopback bridge unavailable, then click **Send to Forge** on Civitai.
+With Forge running locally, open:
 
-The Browser Bridge should fall back to clipboard capture. After Forge is available again, the original Sniper/manual workflow must remain usable.
+```text
+/civitaiflow/api/release
+```
+
+Expected contract:
+
+```json
+{
+  "ok": true,
+  "version": "22.7.2",
+  "interface": "runtime-shell-v2",
+  "runtimeScript": "javascript/civitai_flow.js",
+  "browserBridge": "0.3.0"
+}
+```
+
+This is the quickest way to distinguish a real 22.7.2 runtime from a stale checkout/browser session.
 
 ## Release evidence
 
 For a release candidate, capture at minimum:
 
 - Forge startup console with no CivitaiFlow traceback;
-- full CivitaiFlow desktop tab screenshot;
-- one responsive/narrow screenshot;
-- API Verify success or a deliberate unauthenticated-state screenshot;
+- full desktop CivitaiFlow screenshot;
+- one narrow/responsive screenshot;
+- release diagnostic response;
 - library index ready state;
 - one Browser Bridge `Installed` or successful transfer state;
 - GitHub `validate` workflow success.
