@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "CivitaiFlow Browser Bridge",
-  "version": "0.2.0",
-  "description": "Adds one-click Send to Forge controls and local library status to Civitai model cards and model pages.",
+  "version": "0.3.0",
+  "description": "Adds one-click Send to Forge controls, local library status, update awareness and resilient local Forge discovery to Civitai model cards and pages.",
   "permissions": ["clipboardWrite"],
   "host_permissions": [
     "https://civitai.com/*",

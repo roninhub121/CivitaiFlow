@@ -1,9 +1,10 @@
 "use strict";
 
-const FORGE_BASES = [
-  "http://127.0.0.1:7860",
-  "http://localhost:7860",
-];
+const FORGE_PORTS = [7860, 7861, 7862, 7863];
+const FORGE_BASES = FORGE_PORTS.flatMap((port) => [
+  `http://127.0.0.1:${port}`,
+  `http://localhost:${port}`,
+]);
 
 let preferredBase = null;
 
@@ -20,7 +21,7 @@ async function requestForge(path, options = {}) {
 
   let lastError = null;
   for (const base of bases) {
-    const timeout = withTimeout(options.timeoutMs || 2200);
+    const timeout = withTimeout(options.timeoutMs || (preferredBase === base ? 2200 : 900));
     try {
       const response = await fetch(`${base}${path}`, {
         method: options.method || "GET",
@@ -47,7 +48,7 @@ async function requestForge(path, options = {}) {
 
   return {
     ok: false,
-    error: lastError ? String(lastError.message || lastError) : "Forge is unavailable",
+    error: lastError ? String(lastError.message || lastError) : "Forge is unavailable on ports 7860-7863",
   };
 }
 
