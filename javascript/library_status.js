@@ -8,11 +8,6 @@
         return typeof gradioApp === "function" ? gradioApp() : document;
     }
 
-    function refreshVersionBadge() {
-        const badge = root().querySelector(".cf-version");
-        if (badge && badge.textContent.trim() !== "v22.5") badge.textContent = "v22.5";
-    }
-
     function ensureStyles() {
         if (document.getElementById(STYLE_ID)) return;
         const style = document.createElement("style");
@@ -71,12 +66,18 @@
         document.head.appendChild(style);
     }
 
+    function widgetHost() {
+        return root().querySelector("#cf_system_host") || root().querySelector("#cf_connection_card");
+    }
+
     function ensureWidget() {
-        refreshVersionBadge();
-        const card = root().querySelector("#cf_connection_card");
-        if (!card) return null;
+        const host = widgetHost();
+        if (!host) return null;
         let widget = root().querySelector(`#${WIDGET_ID}`);
-        if (widget) return widget;
+        if (widget) {
+            if (widget.parentElement !== host) host.appendChild(widget);
+            return widget;
+        }
 
         ensureStyles();
         widget = document.createElement("div");
@@ -104,12 +105,11 @@
                 void refreshWidget();
             }, 800);
         });
-        card.appendChild(widget);
+        host.appendChild(widget);
         return widget;
     }
 
     async function refreshWidget() {
-        refreshVersionBadge();
         const widget = ensureWidget();
         if (!widget) return;
         const text = widget.querySelector(".cf-library-text");
@@ -134,12 +134,11 @@
             text.textContent = `${Number(data.assets || 0).toLocaleString()} indexed · ${loras.toLocaleString()} LoRA · ${checkpoints.toLocaleString()} checkpoints`;
         } catch (_) {
             widget.dataset.state = "error";
-            text.textContent = "Library index · service unavailable";
+            text.textContent = "Library index · service unavailable · restart Forge after updating CivitaiFlow";
         }
     }
 
     function bind() {
-        refreshVersionBadge();
         ensureWidget();
         void refreshWidget();
     }
