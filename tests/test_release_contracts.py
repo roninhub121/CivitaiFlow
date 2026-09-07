@@ -59,6 +59,30 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertNotIn('"apiKey": api_key', release_module)
         self.assertNotIn('"api_key": api_key', release_module)
 
+    def test_windows_sniper_uses_native_clipboard_and_safe_startup_workspace(self):
+        stability = read("scripts/zzzzzz_civitaiflow_stability.py")
+        self.assertIn("GetClipboardSequenceNumber", stability)
+        self.assertIn("GetClipboardData", stability)
+        self.assertIn("UI.get_windows_clipboard = _native_windows_clipboard", stability)
+        self.assertIn("UI.master_tick = _master_tick", stability)
+        self.assertIn("UI.build_civitai_frame = _safe_workspace_html", stability)
+        self.assertIn("UI.reload_civitai_frame", stability)
+        self.assertNotIn("subprocess.check_output", stability)
+        self.assertNotIn("powershell", stability.lower())
+
+    def test_api_key_settings_override_is_password_field(self):
+        stability = read("scripts/zzzzzz_civitaiflow_stability.py")
+        self.assertIn('{"visible": True, "type": "password"}', stability)
+
+    def test_compact_ux_has_direct_send_path_without_clipboard_dependency(self):
+        ux = read("javascript/zzz_civitaiflow_ux.js")
+        self.assertIn('/civitaiflow/api/capture', ux)
+        self.assertIn('id="${SEND_BUTTON_ID}"', ux)
+        self.assertIn("Send now", ux)
+        self.assertIn("Ctrl", "Ctrl")  # document intent is represented by ctrlKey binding below
+        self.assertIn("event.ctrlKey", ux)
+        self.assertNotIn("setInterval(bind", ux)
+
     def test_browser_bridge_discovers_common_forge_ports(self):
         background = read("browser-extension/background.js")
         manifest = json.loads(read("browser-extension/manifest.json"))
@@ -73,6 +97,7 @@ class ReleaseContractTests(unittest.TestCase):
             "zzz_civitaiflow_updates.py",
             "zzzz_civitaiflow_lifecycle.py",
             "zzzzz_civitaiflow_release.py",
+            "zzzzzz_civitaiflow_stability.py",
         ]
         self.assertEqual(scripts, sorted(scripts))
 
@@ -86,6 +111,8 @@ class ReleaseContractTests(unittest.TestCase):
     def test_legacy_duplicate_premium_shell_is_not_required(self):
         workflow = read(".github/workflows/validate.yml")
         self.assertNotIn("javascript/premium_shell.js", workflow)
+        self.assertIn("scripts/zzzzzz_civitaiflow_stability.py", workflow)
+        self.assertIn("javascript/zzz_civitaiflow_ux.js", workflow)
 
 
 if __name__ == "__main__":
