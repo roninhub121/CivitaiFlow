@@ -35,6 +35,15 @@ class FakeOptionInfo:
         self.section = section
 
 
+class FakeResponse:
+    def __init__(self, status_code, payload):
+        self.status_code = status_code
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
 class BaselineHarness(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -100,6 +109,7 @@ class BaselineHarness(unittest.TestCase):
         self.assertTrue(callable(self.ui.on_ui_tabs))
         self.assertTrue(callable(self.ui.master_tick))
         self.assertTrue(callable(self.ui.save_and_connect_api))
+        self.assertTrue(callable(self.ui.send_now))
 
     def test_api_key_is_actually_persisted(self):
         original = self.ui._validate_api_key
@@ -114,6 +124,11 @@ class BaselineHarness(unittest.TestCase):
         self.assertIn("Connected as roninhub", status)
         self.assertEqual(field_update.get("value"), "")
 
+    def test_settings_api_key_control_is_password_type(self):
+        self.ui.on_ui_settings()
+        option = self.opts.options["civitai_api_key"]
+        self.assertEqual(option.component_args.get("type"), "password")
+
     def test_refresh_status_reads_persisted_key_instead_of_losing_it(self):
         self.opts.data["civitai_api_key"] = "abc123456789"
         status = self.ui.initial_api_status()
@@ -121,25 +136,59 @@ class BaselineHarness(unittest.TestCase):
         self.assertIn("6789", status)
         self.assertNotIn("abc123456789", status)
 
-    def test_model_page_urls_are_recognized(self):
+    def test_model_page_urls_preserve_exact_version_when_present(self):
         self.assertEqual(
             self.ui.parse_civitai_urls("https://civitai.com/models/12345"),
-            ["12345"],
+            ["model:12345"],
         )
         self.assertEqual(
             self.ui.parse_civitai_urls("https://civitai.com/models/12345?modelVersionId=67890"),
-            ["12345"],
+            ["model:12345:version:67890"],
         )
 
-    @unittest.expectedFailure
-    def test_download_file_url_must_not_be_misclassified_as_model_id(self):
-        # Civitai file links use /api/download/models/<modelVersionId>.
-        # The v22.4 regex returns that version ID as though it were a model ID,
-        # so the downstream /api/v1/models/<id> lookup is wrong.
+    def test_download_file_url_is_recognized_as_version_not_model(self):
         self.assertEqual(
             self.ui.parse_civitai_urls("https://civitai.com/api/download/models/67890"),
-            [],
+            ["version:67890"],
         )
+        self.assertNotEqual(
+            self.ui.parse_civitai_urls("https://civitai.com/api/download/models/67890"),
+            ["model:67890"],
+        )
+
+    def test_version_only_target_resolves_to_owning_model_and_exact_version(self):
+        calls = []
+        original_get = self.ui.requests.get
+
+        def fake_get(url, **kwargs):
+            calls.append(url)
+            if url.endswith("/model-versions/67890"):
+                return FakeResponse(200, {"id": 67890, "modelId": 12345})
+            if url.endswith("/models/12345"):
+                return FakeResponse(
+                    200,
+                    {
+                        "id": 12345,
+                        "modelVersions": [
+                            {"id": 99999, "files": []},
+                            {"id": 67890, "files": []},
+                        ],
+                    },
+                )
+            raise AssertionError(url)
+
+        self.ui.requests.get = fake_get
+        try:
+            model, version = self.ui._resolve_model_and_version("version:67890", {})
+        finally:
+            self.ui.requests.get = original_get
+
+        self.assertEqual(str(model["id"]), "12345")
+        self.assertEqual(str(version["id"]), "67890")
+        self.assertEqual(calls, [
+            f"{self.ui.CIVITAI_API_URL}/model-versions/67890",
+            f"{self.ui.CIVITAI_API_URL}/models/12345",
+        ])
 
     def test_manual_paste_queues_without_touching_clipboard_when_sniper_off(self):
         original_clip = self.ui.get_windows_clipboard
@@ -155,7 +204,22 @@ class BaselineHarness(unittest.TestCase):
             self.ui.get_windows_clipboard = original_clip
             self.ui.start_downloads = original_start
 
-        self.assertEqual(calls, [(["12345"], 3, False)])
+        self.assertEqual(calls, [(["model:12345"], 3, False)])
+        self.assertEqual(text_update, "")
+
+    def test_sniper_accepts_download_file_url(self):
+        original_clip = self.ui.get_windows_clipboard
+        original_start = self.ui.start_downloads
+        calls = []
+        self.ui.get_windows_clipboard = lambda: "https://civitai.com/api/download/models/67890"
+        self.ui.start_downloads = lambda ids, threads, force=False: calls.append((ids, threads, force)) or len(ids)
+        try:
+            text_update, _log = self.ui.master_tick("", True, True, 4)
+        finally:
+            self.ui.get_windows_clipboard = original_clip
+            self.ui.start_downloads = original_start
+
+        self.assertEqual(calls, [(["version:67890"], 4, False)])
         self.assertEqual(text_update, "")
 
     def test_clipboard_is_process_isolated_not_ctypes(self):
@@ -164,7 +228,7 @@ class BaselineHarness(unittest.TestCase):
         self.assertIn("subprocess.check_output", source)
         self.assertIn("Get-Clipboard", source)
 
-    def test_clean_baseline_has_no_runtime_javascript_patch_stack(self):
+    def test_stable_core_has_no_runtime_javascript_patch_stack(self):
         self.assertFalse((ROOT / "javascript").exists())
         self.assertFalse((ROOT / "browser-extension").exists())
 
