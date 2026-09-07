@@ -5,7 +5,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE = "22.7.2"
+RELEASE = "22.8.0"
 
 
 def read(relative_path):
@@ -24,7 +24,7 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertNotIn("v22.5", library_status)
         self.assertNotIn("refreshVersionBadge", library_status)
 
-    def test_proven_browser_script_owns_critical_runtime_shell(self):
+    def test_browser_runtime_uses_finite_binding_instead_of_dom_repair_loop(self):
         runtime = read("javascript/civitai_flow.js")
         for contract in (
             "cf-runtime-shell-style",
@@ -33,10 +33,14 @@ class ReleaseContractTests(unittest.TestCase):
             "#cf_browser_column",
             "#cf_shell_row",
             "enforceCriticalDimensions",
-            "min-height: 640px",
-            "window.setInterval(bind, 1000)",
+            "bootUntilReady",
+            "syncApiStatus",
         ):
             self.assertIn(contract, runtime)
+
+        self.assertNotIn('onUiUpdate(scheduleBind)', runtime)
+        self.assertNotIn('onUiUpdate(bind)', runtime)
+        self.assertNotIn('window.setInterval(bind, 1000)', runtime)
 
     def test_release_fallback_has_inline_logo_and_iframe_guards(self):
         release_module = read("scripts/zzzzz_civitaiflow_release.py")
@@ -46,6 +50,14 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn('width="100%" height="100%"', release_module)
         self.assertIn('min-height:640px', release_module)
         self.assertIn(f"CivitaiFlow/{{CIVITAIFLOW_VERSION}}", release_module)
+
+    def test_auth_status_is_loopback_and_never_returns_raw_key(self):
+        release_module = read("scripts/zzzzz_civitaiflow_release.py")
+        self.assertRegex(release_module, re.escape('@app.get("/civitaiflow/api/auth-status")'))
+        self.assertIn('maskedKey', release_module)
+        self.assertIn('UI.mask_key(api_key)', release_module)
+        self.assertNotIn('"apiKey": api_key', release_module)
+        self.assertNotIn('"api_key": api_key', release_module)
 
     def test_browser_bridge_discovers_common_forge_ports(self):
         background = read("browser-extension/background.js")
@@ -64,11 +76,12 @@ class ReleaseContractTests(unittest.TestCase):
         ]
         self.assertEqual(scripts, sorted(scripts))
 
-    def test_release_endpoint_declares_runtime_shell_v2(self):
+    def test_release_endpoint_declares_runtime_shell_v3(self):
         release_module = read("scripts/zzzzz_civitaiflow_release.py")
         self.assertRegex(release_module, re.escape('@app.get("/civitaiflow/api/release")'))
-        self.assertIn('"interface": "runtime-shell-v2"', release_module)
+        self.assertIn('"interface": "runtime-shell-v3"', release_module)
         self.assertIn('"runtimeScript": "javascript/civitai_flow.js"', release_module)
+        self.assertIn('"stabilityMode": "finite-bind"', release_module)
 
     def test_legacy_duplicate_premium_shell_is_not_required(self):
         workflow = read(".github/workflows/validate.yml")
