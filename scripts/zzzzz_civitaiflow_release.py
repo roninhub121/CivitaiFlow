@@ -1,9 +1,9 @@
-"""CivitaiFlow final release compatibility contract.
+"""CivitaiFlow stability release compatibility contract.
 
-The browser runtime shell now lives in ``javascript/civitai_flow.js`` because
-that script is already proven to load on Forge builds where nested Gradio CSS
-is ignored. This late Python layer remains as a second safety net for critical
-brand/frame dimensions and for a loopback release diagnostic endpoint.
+22.8 keeps the Forge UI shell in ``javascript/civitai_flow.js`` but removes the
+permanent DOM self-healing loop that could fight Gradio renders. This late
+Python layer owns the release identity, critical inline iframe/logo fallbacks,
+and loopback diagnostics used by the browser runtime.
 """
 
 import os
@@ -12,7 +12,7 @@ from fastapi import FastAPI, Request
 from modules import script_callbacks, script_loading
 
 
-CIVITAIFLOW_VERSION = "22.7.2"
+CIVITAIFLOW_VERSION = "22.8.0"
 
 
 def _find_module(filename):
@@ -56,7 +56,7 @@ if UI:
                     <span class="cf-brand-name">CivitaiFlow</span>
                     <span class="cf-version">v{CIVITAIFLOW_VERSION}</span>
                 </div>
-                <div class="cf-brand-sub">Forge-native Civitai workspace · smart acquisition · lifecycle safety</div>
+                <div class="cf-brand-sub">Forge-native Civitai workspace · stability-first acquisition</div>
             </div>
         </div>
         """
@@ -90,17 +90,62 @@ if UPD and callable(getattr(UPD, "update_summary", None)):
     UPD.update_summary = update_summary
 
 
+def _require_local(request):
+    if LIB and hasattr(LIB, "_require_local"):
+        LIB._require_local(request)
+
+
 def register_release_api(_: object, app: FastAPI):
     @app.get("/civitaiflow/api/release")
     async def civitaiflow_release(request: Request):
-        if LIB and hasattr(LIB, "_require_local"):
-            LIB._require_local(request)
+        _require_local(request)
         return {
             "ok": True,
             "version": CIVITAIFLOW_VERSION,
-            "interface": "runtime-shell-v2",
+            "interface": "runtime-shell-v3",
             "runtimeScript": "javascript/civitai_flow.js",
             "browserBridge": "0.3.0",
+            "stabilityMode": "finite-bind",
+        }
+
+    @app.get("/civitaiflow/api/auth-status")
+    def civitaiflow_auth_status(request: Request):
+        """Return authoritative Forge-side API credential state without exposing the key.
+
+        This endpoint intentionally runs as a synchronous FastAPI handler so the remote
+        Civitai verification request is executed in the server threadpool rather than
+        blocking the ASGI event loop.
+        """
+        _require_local(request)
+        if not UI:
+            return {
+                "ok": False,
+                "configured": False,
+                "valid": None,
+                "username": None,
+                "maskedKey": "Not configured",
+                "error": "CivitaiFlow UI module is unavailable",
+            }
+
+        api_key = UI.get_api_key()
+        if not api_key:
+            return {
+                "ok": True,
+                "configured": False,
+                "valid": None,
+                "username": None,
+                "maskedKey": "Not configured",
+                "error": None,
+            }
+
+        valid, username, error = UI._validate_api_key(api_key)
+        return {
+            "ok": True,
+            "configured": True,
+            "valid": bool(valid),
+            "username": username,
+            "maskedKey": UI.mask_key(api_key),
+            "error": error,
         }
 
 
