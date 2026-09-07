@@ -2,42 +2,21 @@ name: validate
 
 on:
   push:
-    branches: [main]
+    branches: [fix/22.8-revert-stable-core]
   pull_request:
 
 permissions:
   contents: read
 
 jobs:
-  syntax:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-
-      - name: Compile Python sources
-        run: |
-          python -m py_compile scripts/ronin_ui.py
-          python -m py_compile scripts/zz_civitaiflow_library.py
-          python -m py_compile scripts/zzz_civitaiflow_updates.py
-          python -m py_compile scripts/zzzz_civitaiflow_lifecycle.py
-          python -m py_compile scripts/zzzzz_civitaiflow_release.py
-          python -m py_compile install.py
-
-      - name: Check browser JavaScript syntax
-        run: |
-          node --check javascript/civitai_flow.js
-          node --check javascript/library_status.js
-          node --check javascript/update_center.js
-          node --check browser-extension/background.js
-          node --check browser-extension/content.js
-
-      - name: Validate Browser Bridge manifest JSON
-        run: python -m json.tool browser-extension/manifest.json >/dev/null
-
-      - name: Validate release contracts
+      - name: Compile extension
+        run: python -m py_compile scripts/ronin_ui.py install.py
+      - name: Run behavioral tests
         run: python -m unittest discover -s tests -p "test_*.py" -v

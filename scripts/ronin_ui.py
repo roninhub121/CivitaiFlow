@@ -11,11 +11,13 @@ import modules.scripts as scripts
 import gradio as gr
 from modules import paths, shared, script_callbacks
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import parse_qs, urlparse
 
 LORA_DIR = os.path.join(paths.models_path, "Lora")
 CIVITAI_BASE_URL = "https://civitai.com"
 CIVITAI_API_URL = f"{CIVITAI_BASE_URL}/api/v1"
-CIVITAI_SETTINGS_URL = f"{CIVITAI_BASE_URL}/user/settings"
+CIVITAI_SETTINGS_URL = f"{CIVITAI_BASE_URL}/user/account"
+CIVITAIFLOW_VERSION = "22.8.0-rc1"
 
 # --- GLOBAL STATE ---
 DOWNLOAD_STATUS = {}
@@ -35,7 +37,7 @@ def on_ui_settings():
             "",
             "Civitai API Key",
             gr.Textbox,
-            {"visible": True},
+            {"visible": True, "type": "password"},
             section=section,
         ),
     )
@@ -50,7 +52,7 @@ def get_api_key():
 
 def build_headers(api_key=None):
     api_key = (api_key if api_key is not None else get_api_key()).strip()
-    headers = {"User-Agent": "CivitaiFlow/22.4 (Stable Diffusion Forge)"}
+    headers = {"User-Agent": f"CivitaiFlow/{CIVITAIFLOW_VERSION} (Stable Diffusion Forge)"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
@@ -81,12 +83,12 @@ def initial_api_status():
         return status_html(
             "warn",
             "API key saved",
-            f"{mask_key(api_key)} · Use Connect / Verify to confirm access.",
+            f"{mask_key(api_key)} · Click Verify if you want to re-check access.",
         )
     return status_html(
         "muted",
         "API access not configured",
-        "The embedded site still works. Private or gated downloads need a Civitai API key.",
+        "Public models still work. Private or gated downloads need a Civitai API key.",
     )
 
 
@@ -130,7 +132,7 @@ def check_api_status():
         return status_html(
             "muted",
             "API access not configured",
-            "Paste a key below, then click Connect API.",
+            "Paste a key in Connection settings, then click Connect API.",
         )
     return status_html("error", "API connection failed", error or "Unknown error.")
 
@@ -179,13 +181,18 @@ def disconnect_api():
         status_html(
             "muted",
             "API access disconnected",
-            "Embedded browsing remains available; gated downloads will require a key.",
+            "Public downloads remain available; gated downloads will require a key.",
         ),
         gr.update(value=""),
     )
 
 
 def get_windows_clipboard():
+    """Read clipboard text in an isolated process.
+
+    Do not replace this with direct ctypes/Win32 memory access: an earlier CivitaiFlow
+    release explicitly moved away from that path after Forge memory-segfault reports.
+    """
     try:
         clip_bytes = subprocess.check_output(
             [
@@ -198,18 +205,78 @@ def get_windows_clipboard():
             timeout=2,
         )
         text = clip_bytes.decode("utf-8", errors="ignore").strip()
-        if len(text) > 300 or "$uiCode" in text or "import os" in text:
+        if len(text) > 4096 or "$uiCode" in text or "import os" in text:
             return ""
         return text
     except Exception:
         return ""
 
 
+def _target_token(model_id=None, version_id=None):
+    model_id = str(model_id or "").strip()
+    version_id = str(version_id or "").strip()
+    if model_id.isdigit() and version_id.isdigit():
+        return f"model:{model_id}:version:{version_id}"
+    if model_id.isdigit():
+        return f"model:{model_id}"
+    if version_id.isdigit():
+        return f"version:{version_id}"
+    return None
+
+
+def _decode_target_token(value):
+    value = str(value or "").strip()
+    match = re.fullmatch(r"model:(\d+):version:(\d+)", value)
+    if match:
+        return {"model_id": match.group(1), "version_id": match.group(2)}
+    match = re.fullmatch(r"model:(\d+)", value)
+    if match:
+        return {"model_id": match.group(1), "version_id": None}
+    match = re.fullmatch(r"version:(\d+)", value)
+    if match:
+        return {"model_id": None, "version_id": match.group(1)}
+    if value.isdigit():
+        return {"model_id": value, "version_id": None}
+    return None
+
+
 def parse_civitai_urls(text):
-    text = text or ""
-    matches = re.findall(r"models/(\d+)", text)
-    numbers = re.findall(r"^\d+$", text, re.MULTILINE)
-    return list(dict.fromkeys(matches + numbers))
+    """Parse model-page links and copied Civitai file-download links.
+
+    Civitai's `/models/<id>` path contains a model ID. In contrast,
+    `/api/download/models/<id>` contains a model *version* ID. Treating both as
+    model IDs was the reason copied file links silently failed in older builds.
+    """
+    text = str(text or "")
+    results = []
+    seen = set()
+
+    url_candidates = re.findall(r"https?://(?:www\.)?civitai\.com/[^\s<>'\"]+", text, flags=re.I)
+    for raw in url_candidates:
+        try:
+            parsed = urlparse(raw)
+        except ValueError:
+            continue
+
+        page_match = re.match(r"^/models/(\d+)(?:/|$)", parsed.path, flags=re.I)
+        if page_match:
+            version_id = (parse_qs(parsed.query).get("modelVersionId") or [None])[0]
+            token = _target_token(page_match.group(1), version_id)
+        else:
+            download_match = re.match(r"^/api/download/models/(\d+)(?:/|$)", parsed.path, flags=re.I)
+            token = _target_token(version_id=download_match.group(1)) if download_match else None
+
+        if token and token not in seen:
+            seen.add(token)
+            results.append(token)
+
+    for number in re.findall(r"^\s*(\d+)\s*$", text, flags=re.MULTILINE):
+        token = _target_token(model_id=number)
+        if token and token not in seen:
+            seen.add(token)
+            results.append(token)
+
+    return results
 
 
 def safe_filename_component(value, fallback="General"):
@@ -221,73 +288,151 @@ def strip_html(value):
     return re.sub(r"<[^>]+>", "", value or "").strip()
 
 
-def download_by_id(model_id, api_key):
+def _resolve_model_and_version(target, headers):
+    parsed_target = _decode_target_token(target)
+    if not parsed_target:
+        raise RuntimeError("Unrecognized Civitai target")
+
+    model_id = parsed_target.get("model_id")
+    requested_version_id = parsed_target.get("version_id")
+
+    if not model_id and requested_version_id:
+        version_response = requests.get(
+            f"{CIVITAI_API_URL}/model-versions/{requested_version_id}",
+            headers=headers,
+            timeout=20,
+        )
+        if version_response.status_code != 200:
+            raise RuntimeError(f"Civitai version API returned HTTP {version_response.status_code}")
+        version_payload = version_response.json()
+        model_id = str(
+            version_payload.get("modelId")
+            or (version_payload.get("model") or {}).get("id")
+            or ""
+        ).strip()
+        if not model_id.isdigit():
+            raise RuntimeError("Civitai version response did not include a model ID")
+
+    model_response = requests.get(
+        f"{CIVITAI_API_URL}/models/{model_id}",
+        headers=headers,
+        timeout=20,
+    )
+    if model_response.status_code != 200:
+        if model_response.status_code in (401, 403):
+            raise PermissionError("Authentication required or API key rejected")
+        raise RuntimeError(f"Civitai model API returned HTTP {model_response.status_code}")
+
+    model_data = model_response.json()
+    versions = model_data.get("modelVersions") or []
+    if not versions:
+        raise RuntimeError("No downloadable model versions found")
+
+    if requested_version_id:
+        version = next(
+            (item for item in versions if str(item.get("id")) == str(requested_version_id)),
+            None,
+        )
+        if not version:
+            raise RuntimeError(f"Requested model version {requested_version_id} was not found")
+    else:
+        version = versions[0]
+
+    return model_data, version
+
+
+def download_by_id(target, api_key):
     global DOWNLOAD_STATUS, FAILED_IDS
 
-    tracker_name = f"ID: {model_id}"
+    parsed_target = _decode_target_token(target)
+    tracker_key = str(target)
+    tracker_name = (
+        f"Version {parsed_target['version_id']}"
+        if parsed_target and not parsed_target.get("model_id")
+        else f"Model {parsed_target.get('model_id') if parsed_target else target}"
+    )
     DOWNLOAD_STATUS[tracker_name] = "Connecting..."
     headers = build_headers(api_key)
 
     try:
-        response = requests.get(
-            f"{CIVITAI_API_URL}/models/{model_id}",
-            headers=headers,
-            timeout=20,
-        )
-        if response.status_code != 200:
-            if response.status_code in (401, 403):
-                DOWNLOAD_STATUS[tracker_name] = "ERROR · Authentication required or API key rejected"
-            else:
-                DOWNLOAD_STATUS[tracker_name] = f"ERROR · API HTTP {response.status_code}"
-            FAILED_IDS.add(model_id)
-            return
+        model_data, version = _resolve_model_and_version(target, headers)
+        model_id = str(model_data.get("id") or (parsed_target or {}).get("model_id") or "")
 
-        model_data = response.json()
-        versions = model_data.get("modelVersions") or []
-        if not versions:
-            DOWNLOAD_STATUS[tracker_name] = "ERROR · No downloadable model versions found"
-            FAILED_IDS.add(model_id)
-            return
-
-        version = versions[0]
         files_list = version.get("files") or []
-        primary_file = next(
-            (
+        candidates = [
+            file_info
+            for file_info in files_list
+            if file_info.get("type") == "Model"
+            and str(file_info.get("name", "")).lower().endswith((".safetensors", ".ckpt"))
+        ]
+        if not candidates:
+            candidates = [
                 file_info
                 for file_info in files_list
-                if file_info.get("type") == "Model"
-                and str(file_info.get("name", "")).lower().endswith(".safetensors")
-            ),
-            None,
-        )
+                if str(file_info.get("name", "")).lower().endswith((".safetensors", ".ckpt"))
+            ]
+        primary_file = next((item for item in candidates if item.get("primary") is True), None)
+        primary_file = primary_file or (candidates[0] if candidates else None)
         if not primary_file:
-            DOWNLOAD_STATUS[tracker_name] = "ERROR · No .safetensors model file found"
-            FAILED_IDS.add(model_id)
-            return
+            raise RuntimeError("No supported model file found")
 
         download_url = primary_file.get("downloadUrl") or (
             f"{CIVITAI_BASE_URL}/api/download/models/{version['id']}"
         )
-    except (requests.RequestException, ValueError, KeyError) as exc:
-        DOWNLOAD_STATUS[tracker_name] = f"ERROR · {str(exc)[:80]}"
-        FAILED_IDS.add(model_id)
+    except PermissionError as exc:
+        DOWNLOAD_STATUS[tracker_name] = f"ERROR · {str(exc)}"
+        FAILED_IDS.add(tracker_key)
+        return
+    except (requests.RequestException, ValueError, KeyError, RuntimeError) as exc:
+        DOWNLOAD_STATUS[tracker_name] = f"ERROR · {str(exc)[:120]}"
+        FAILED_IDS.add(tracker_key)
         return
 
     clean_name = safe_filename_component(model_data.get("name"), tracker_name)
     DOWNLOAD_STATUS.pop(tracker_name, None)
     tracker_name = clean_name
 
-    tag = (model_data.get("tags") or ["General"])[0]
-    target_dir = os.path.join(LORA_DIR, safe_filename_component(tag))
+    model_type = str(model_data.get("type") or "LORA")
+    if model_type == "Checkpoint":
+        target_dir = os.path.join(paths.models_path, "Stable-diffusion")
+    elif model_type == "VAE":
+        target_dir = os.path.join(paths.models_path, "VAE")
+    else:
+        tag = (model_data.get("tags") or ["General"])[0]
+        target_dir = os.path.join(LORA_DIR, safe_filename_component(tag))
     os.makedirs(target_dir, exist_ok=True)
 
-    safetensors_path = os.path.join(target_dir, f"{clean_name}.safetensors")
-    partial_path = f"{safetensors_path}.part"
+    source_name = safe_filename_component(primary_file.get("name"), f"{clean_name}.safetensors")
+    extension = os.path.splitext(source_name)[1].lower()
+    if extension not in {".safetensors", ".ckpt"}:
+        extension = ".safetensors"
+    version_suffix = str(version.get("id") or "")
+    base_name = clean_name
+    destination = os.path.join(target_dir, f"{base_name}{extension}")
 
-    if os.path.exists(safetensors_path):
-        DOWNLOAD_STATUS[tracker_name] = "DONE · Already exists"
-        FAILED_IDS.discard(model_id)
-        return
+    # Never overwrite a different version blindly. Keep the familiar clean name
+    # for first installs; use the version ID only when that name already exists.
+    if os.path.exists(destination):
+        sidecar = os.path.splitext(destination)[0] + ".json"
+        installed_version = None
+        try:
+            with open(sidecar, "r", encoding="utf-8") as handle:
+                installed_version = str((json.load(handle) or {}).get("civitai version id") or "")
+        except (OSError, ValueError, TypeError):
+            installed_version = None
+
+        if installed_version and installed_version == version_suffix:
+            DOWNLOAD_STATUS[tracker_name] = "DONE · Already installed"
+            FAILED_IDS.discard(tracker_key)
+            return
+        destination = os.path.join(target_dir, f"{base_name}__v{version_suffix}{extension}")
+        if os.path.exists(destination):
+            DOWNLOAD_STATUS[tracker_name] = "DONE · Version already exists"
+            FAILED_IDS.discard(tracker_key)
+            return
+
+    partial_path = f"{destination}.part"
+    metadata_base = os.path.splitext(destination)[0]
 
     try:
         forge_json = {
@@ -297,12 +442,9 @@ def download_by_id(model_id, api_key):
             "preferred weight": 1.0,
             "civitai model id": model_data.get("id"),
             "civitai version id": version.get("id"),
+            "civitai file name": primary_file.get("name"),
         }
-        with open(
-            os.path.join(target_dir, f"{clean_name}.json"),
-            "w",
-            encoding="utf-8",
-        ) as file_handle:
+        with open(f"{metadata_base}.json", "w", encoding="utf-8") as file_handle:
             json.dump(forge_json, file_handle, indent=4, ensure_ascii=False)
 
         if version.get("images"):
@@ -315,10 +457,7 @@ def download_by_id(model_id, api_key):
                         timeout=20,
                     )
                     if image_response.status_code == 200:
-                        with open(
-                            os.path.join(target_dir, f"{clean_name}.png"),
-                            "wb",
-                        ) as file_handle:
+                        with open(f"{metadata_base}.png", "wb") as file_handle:
                             file_handle.write(image_response.content)
             except (requests.RequestException, OSError, KeyError):
                 pass
@@ -329,12 +468,12 @@ def download_by_id(model_id, api_key):
             stream=True,
             timeout=600,
         ) as download_response:
-            if download_response.status_code != 200:
+            if download_response.status_code not in (200, 206):
                 if download_response.status_code in (401, 403):
                     DOWNLOAD_STATUS[tracker_name] = "ERROR · Download requires a valid Civitai API key"
                 else:
                     DOWNLOAD_STATUS[tracker_name] = f"ERROR · HTTP {download_response.status_code}"
-                FAILED_IDS.add(model_id)
+                FAILED_IDS.add(tracker_key)
                 return
 
             total_size = int(download_response.headers.get("content-length", 0) or 0)
@@ -357,33 +496,33 @@ def download_by_id(model_id, api_key):
                         downloaded_mb = downloaded_bytes / (1024 * 1024)
                         DOWNLOAD_STATUS[tracker_name] = f"{downloaded_mb:.1f} MB · {speed:.1f} MB/s"
 
-        os.replace(partial_path, safetensors_path)
+        os.replace(partial_path, destination)
         DOWNLOAD_STATUS[tracker_name] = "DONE · Complete"
-        FAILED_IDS.discard(model_id)
+        FAILED_IDS.discard(tracker_key)
     except (requests.RequestException, OSError, ValueError) as exc:
         try:
             if os.path.exists(partial_path):
                 os.remove(partial_path)
         except OSError:
             pass
-        DOWNLOAD_STATUS[tracker_name] = f"ERROR · {str(exc)[:80]}"
-        FAILED_IDS.add(model_id)
+        DOWNLOAD_STATUS[tracker_name] = f"ERROR · {str(exc)[:100]}"
+        FAILED_IDS.add(tracker_key)
 
 
-def _download_worker(model_id, api_key):
+def _download_worker(target, api_key):
     global ACTIVE_TASKS
     try:
-        download_by_id(model_id, api_key)
+        download_by_id(target, api_key)
     finally:
         with TASK_LOCK:
             ACTIVE_TASKS = max(0, ACTIVE_TASKS - 1)
 
 
-def start_downloads(model_ids, threads, force=False):
+def start_downloads(targets, threads, force=False):
     global ACTIVE_TASKS, PROCESSED_IDS
 
-    normalized_ids = [str(model_id).strip() for model_id in model_ids if str(model_id).strip()]
-    if not normalized_ids:
+    normalized = [str(target).strip() for target in targets if _decode_target_token(target)]
+    if not normalized:
         return 0
 
     max_workers = max(1, min(int(threads), 10))
@@ -391,21 +530,18 @@ def start_downloads(model_ids, threads, force=False):
 
     with TASK_LOCK:
         accepted = []
-        for model_id in normalized_ids:
-            if force or model_id not in PROCESSED_IDS:
-                PROCESSED_IDS.add(model_id)
-                accepted.append(model_id)
+        for target in normalized:
+            if force or target not in PROCESSED_IDS:
+                PROCESSED_IDS.add(target)
+                accepted.append(target)
         ACTIVE_TASKS += len(accepted)
 
     if not accepted:
         return 0
 
-    def run_pool(ids):
+    def run_pool(items):
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [
-                executor.submit(_download_worker, model_id, api_key)
-                for model_id in ids
-            ]
+            futures = [executor.submit(_download_worker, target, api_key) for target in items]
             for future in futures:
                 try:
                     future.result()
@@ -424,9 +560,15 @@ def master_tick(current_text, is_sniper, is_auto, threads):
 
     if is_sniper:
         clip = get_windows_clipboard()
-        if clip and "civitai.com/models/" in clip and clip != LAST_CLIPBOARD:
+        targets = parse_civitai_urls(clip)
+        if clip and targets and clip != LAST_CLIPBOARD:
             LAST_CLIPBOARD = clip
-            if clip not in current_text:
+            if is_auto:
+                queued = start_downloads(targets, threads)
+                if queued:
+                    current_text = ""
+                    text_update = ""
+            elif clip not in current_text:
                 current_text = (
                     current_text.strip() + "\n" + clip
                     if current_text.strip()
@@ -434,7 +576,7 @@ def master_tick(current_text, is_sniper, is_auto, threads):
                 )
                 text_update = current_text
 
-    if is_auto:
+    if is_auto and current_text.strip():
         queued = start_downloads(parse_civitai_urls(current_text), threads)
         if queued:
             text_update = ""
@@ -456,11 +598,11 @@ def master_tick(current_text, is_sniper, is_auto, threads):
         if ACTIVE_TASKS > 0:
             log_out.append(f"ACTIVE DOWNLOADS  {ACTIVE_TASKS}\n" + "─" * 34)
         log_out.extend(
-            [f"{name[:36]}\n  {status}\n" for name, status in DOWNLOAD_STATUS.items()]
+            [f"{name[:42]}\n  {status}\n" for name, status in DOWNLOAD_STATUS.items()]
         )
         return text_update, "\n".join(log_out)
 
-    return text_update, "IDLE\nCopy a Civitai model link to start."
+    return text_update, "IDLE\nCopy or paste a Civitai model/file link."
 
 
 def retry_failed(threads):
@@ -483,6 +625,16 @@ def reset_all():
     return "", "IDLE\nActivity cleared."
 
 
+def send_now(text, threads):
+    targets = parse_civitai_urls(text)
+    if not targets:
+        return gr.update(), "No valid Civitai model or file link found."
+    queued = start_downloads(targets, threads)
+    if queued:
+        return "", f"Queued {queued} download(s)."
+    return gr.update(), "Nothing queued: target may already be active/processed."
+
+
 def open_loras():
     os.makedirs(LORA_DIR, exist_ok=True)
     try:
@@ -496,7 +648,7 @@ def open_civitai():
     try:
         opened = webbrowser.open_new_tab(CIVITAI_BASE_URL)
         if opened:
-            return "Opened Civitai in your normal browser. Use this for Google/Civitai website login."
+            return "Opened Civitai in your normal browser. Use this for website login and browsing."
         return "Your browser did not acknowledge the request. Open https://civitai.com manually."
     except Exception as exc:
         return f"Could not open browser: `{html.escape(str(exc)[:120])}`"
@@ -506,13 +658,10 @@ def open_api_key_settings():
     try:
         opened = webbrowser.open_new_tab(CIVITAI_SETTINGS_URL)
         if opened:
-            return (
-                "Opened Civitai Settings. Sign in if needed, create an API key, "
-                "copy it, then paste it into the API Access card."
-            )
+            return "Opened your Civitai account page. Create/copy an API key, then paste it into Connection settings."
         return f"Open {CIVITAI_SETTINGS_URL} manually."
     except Exception as exc:
-        return f"Could not open Civitai Settings: `{html.escape(str(exc)[:120])}`"
+        return f"Could not open Civitai account: `{html.escape(str(exc)[:120])}`"
 
 
 def build_civitai_frame(cache_buster=None):
@@ -531,7 +680,7 @@ def reload_civitai_frame():
 
 
 def brand_html():
-    return """
+    return f"""
     <div class="cf-brand">
         <div class="cf-brand-mark" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none">
@@ -543,9 +692,9 @@ def brand_html():
         <div>
             <div class="cf-brand-row">
                 <span class="cf-brand-name">CivitaiFlow</span>
-                <span class="cf-version">v22.4</span>
+                <span class="cf-version">v{CIVITAIFLOW_VERSION}</span>
             </div>
-            <div class="cf-brand-sub">Embedded Civitai · API-powered downloads · Forge native</div>
+            <div class="cf-brand-sub">Stable core · Civitai acquisition for Forge</div>
         </div>
     </div>
     """
@@ -554,14 +703,8 @@ def brand_html():
 def connection_help_html():
     return """
     <div class="cf-help">
-        <strong>API auth is not a second website login.</strong>
-        It gives CivitaiFlow a token for authenticated metadata and gated downloads.
-        The embedded Civitai page keeps its own browser session.
-        <ol>
-            <li>Open <b>Get API Key</b> and sign in to Civitai normally.</li>
-            <li>Create/copy an API key in Civitai Settings.</li>
-            <li>Paste it here and click <b>Connect API</b>.</li>
-        </ol>
+        <strong>API key = download access, not website login.</strong>
+        Website login stays in your normal Civitai browser session. The API key is used only for metadata and gated downloads.
     </div>
     """
 
@@ -572,266 +715,104 @@ def on_ui_tabs():
         --cf-border: rgba(148, 163, 184, 0.18);
         --cf-border-strong: rgba(148, 163, 184, 0.28);
         --cf-panel: rgba(15, 23, 42, 0.42);
-        --cf-panel-strong: rgba(15, 23, 42, 0.72);
         --cf-text-dim: #94a3b8;
         --cf-accent: #f97316;
         --cf-ok: #34d399;
         --cf-warn: #fbbf24;
         --cf-error: #fb7185;
-        gap: 14px;
-    }
-    #cf_root .gradio-row {
-        gap: 14px;
-    }
-    .cf-brand {
-        display: flex;
-        align-items: center;
         gap: 12px;
-        padding: 2px 2px 10px;
     }
-    .cf-brand-mark {
-        width: 34px;
-        height: 34px;
-        display: grid;
-        place-items: center;
-        color: var(--cf-accent);
+    #cf_root .gradio-row { gap: 12px; }
+    .cf-brand { display:flex; align-items:center; gap:10px; padding:2px 2px 8px; }
+    .cf-brand-mark { width:32px; height:32px; flex:0 0 32px; display:grid; place-items:center; color:var(--cf-accent); }
+    .cf-brand-mark svg { width:27px; height:27px; }
+    .cf-brand-row { display:flex; align-items:center; gap:8px; line-height:1; }
+    .cf-brand-name { font-size:20px; font-weight:750; letter-spacing:-.025em; }
+    .cf-version { font-size:10px; font-weight:700; padding:3px 6px; border:1px solid var(--cf-border-strong); border-radius:999px; color:var(--cf-text-dim); }
+    .cf-brand-sub { margin-top:5px; color:var(--cf-text-dim); font-size:11px; }
+    #cf_connection_card, #cf_capture_card, #cf_activity_card {
+        border:1px solid var(--cf-border) !important;
+        border-radius:12px !important;
+        background:var(--cf-panel) !important;
+        padding:11px !important;
+        box-shadow:none !important;
     }
-    .cf-brand-mark svg {
-        width: 30px;
-        height: 30px;
-    }
-    .cf-brand-row {
-        display: flex;
-        align-items: center;
-        gap: 9px;
-        line-height: 1;
-    }
-    .cf-brand-name {
-        font-size: 21px;
-        font-weight: 750;
-        letter-spacing: -0.025em;
-    }
-    .cf-version {
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: .04em;
-        padding: 4px 7px;
-        border: 1px solid var(--cf-border-strong);
-        border-radius: 999px;
-        color: var(--cf-text-dim);
-    }
-    .cf-brand-sub {
-        margin-top: 6px;
-        color: var(--cf-text-dim);
-        font-size: 12px;
-    }
-    #cf_connection_card,
-    #cf_capture_card,
-    #cf_activity_card {
-        border: 1px solid var(--cf-border) !important;
-        border-radius: 14px !important;
-        background: var(--cf-panel) !important;
-        padding: 13px !important;
-        box-shadow: none !important;
-    }
-    .cf-section-label {
-        margin: 0 0 10px;
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: .12em;
-        font-weight: 750;
-        color: var(--cf-text-dim);
-    }
-    .cf-status {
-        display: flex;
-        align-items: center;
-        gap: 9px;
-        min-height: 42px;
-        border: 1px solid var(--cf-border);
-        border-radius: 10px;
-        padding: 9px 11px;
-        margin-bottom: 9px;
-        background: rgba(2, 6, 23, .24);
-    }
-    .cf-status-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 999px;
-        flex: 0 0 auto;
-        background: var(--cf-text-dim);
-        box-shadow: 0 0 0 4px rgba(148, 163, 184, .08);
-    }
-    .cf-status-ok .cf-status-dot {
-        background: var(--cf-ok);
-        box-shadow: 0 0 0 4px rgba(52, 211, 153, .1);
-    }
-    .cf-status-warn .cf-status-dot {
-        background: var(--cf-warn);
-        box-shadow: 0 0 0 4px rgba(251, 191, 36, .1);
-    }
-    .cf-status-error .cf-status-dot {
-        background: var(--cf-error);
-        box-shadow: 0 0 0 4px rgba(251, 113, 133, .1);
-    }
-    .cf-status-copy {
-        display: flex;
-        flex-direction: column;
-        line-height: 1.25;
-        min-width: 0;
-    }
-    .cf-status-copy strong {
-        font-size: 12px;
-    }
-    .cf-status-detail {
-        margin-top: 3px;
-        color: var(--cf-text-dim);
-        font-size: 11px;
-        white-space: normal;
-    }
-    .cf-help {
-        color: var(--cf-text-dim);
-        font-size: 12px;
-        line-height: 1.5;
-        padding: 4px 2px;
-    }
-    .cf-help strong {
-        color: inherit;
-    }
-    .cf-help ol {
-        margin: 8px 0 0 18px;
-        padding: 0;
-    }
-    #cf_api_key textarea,
-    #cf_api_key input {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
-        letter-spacing: .04em;
-    }
-    #cf_btn_connect {
-        border-color: rgba(249, 115, 22, .35) !important;
-    }
-    #cf_terminal textarea {
-        background: rgba(2, 6, 23, .72) !important;
-        color: #cbd5e1 !important;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
-        font-size: 12px !important;
-        line-height: 1.55 !important;
-        border-radius: 10px !important;
-        border: 1px solid var(--cf-border) !important;
-        box-shadow: none !important;
-    }
-    #cf_dropzone textarea {
-        background: rgba(2, 6, 23, .28) !important;
-        border: 1px dashed var(--cf-border-strong) !important;
-        border-radius: 10px !important;
-        text-align: left;
-    }
-    #cf_root button {
-        border-radius: 9px !important;
-        font-weight: 650 !important;
-        min-height: 38px;
-    }
-    #cf_root button.primary {
-        box-shadow: none !important;
-    }
-    .cf-frame-shell {
-        height: 92vh;
-        min-height: 720px;
-        overflow: hidden;
-        border: 1px solid var(--cf-border);
-        border-radius: 14px;
-        background: #0b0f19;
-        box-shadow: 0 12px 30px rgba(0, 0, 0, .16);
-    }
-    .cf-frame-shell iframe {
-        display: block;
-        width: 100%;
-        height: 100%;
-        border: 0;
-        background: #0b0f19;
-    }
-    #cf_action_status {
-        min-height: 18px;
-        color: var(--cf-text-dim);
-        font-size: 12px;
-    }
+    .cf-section-label { margin:0 0 8px; font-size:10px; text-transform:uppercase; letter-spacing:.12em; font-weight:750; color:var(--cf-text-dim); }
+    .cf-status { display:flex; align-items:center; gap:8px; min-height:38px; border:1px solid var(--cf-border); border-radius:9px; padding:8px 9px; margin-bottom:7px; background:rgba(2,6,23,.24); }
+    .cf-status-dot { width:7px; height:7px; border-radius:999px; flex:0 0 auto; background:var(--cf-text-dim); }
+    .cf-status-ok .cf-status-dot { background:var(--cf-ok); }
+    .cf-status-warn .cf-status-dot { background:var(--cf-warn); }
+    .cf-status-error .cf-status-dot { background:var(--cf-error); }
+    .cf-status-copy { display:flex; flex-direction:column; line-height:1.2; min-width:0; }
+    .cf-status-copy strong { font-size:11px; }
+    .cf-status-detail { margin-top:2px; color:var(--cf-text-dim); font-size:10px; white-space:normal; }
+    .cf-help { color:var(--cf-text-dim); font-size:11px; line-height:1.45; padding:3px 1px; }
+    #cf_api_key textarea, #cf_api_key input { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace !important; letter-spacing:.03em; }
+    #cf_btn_connect { border-color:rgba(249,115,22,.35) !important; }
+    #cf_terminal textarea { min-height:125px !important; background:rgba(2,6,23,.72) !important; color:#cbd5e1 !important; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace !important; font-size:11px !important; line-height:1.45 !important; border-radius:9px !important; border:1px solid var(--cf-border) !important; box-shadow:none !important; }
+    #cf_dropzone textarea { background:rgba(2,6,23,.28) !important; border:1px dashed var(--cf-border-strong) !important; border-radius:9px !important; text-align:left; }
+    #cf_root button { border-radius:8px !important; font-weight:650 !important; min-height:34px; }
+    #cf_root button.primary { box-shadow:none !important; }
+    .cf-frame-shell { height:86vh; min-height:650px; overflow:hidden; border:1px solid var(--cf-border); border-radius:12px; background:#0b0f19; box-shadow:0 12px 30px rgba(0,0,0,.16); }
+    .cf-frame-shell iframe { display:block; width:100%; height:100%; border:0; background:#0b0f19; }
+    #cf_action_status { min-height:16px; color:var(--cf-text-dim); font-size:11px; }
     """
 
     with gr.Blocks(analytics_enabled=False, css=custom_css, elem_id="cf_root") as cf_tab:
-        timer = gr.Timer(1.5)
+        timer = gr.Timer(2.0)
 
         with gr.Row():
-            with gr.Column(scale=2, min_width=320):
+            with gr.Column(scale=2, min_width=330):
                 gr.HTML(brand_html())
 
                 with gr.Group(elem_id="cf_connection_card"):
-                    gr.HTML('<div class="cf-section-label">Civitai connection</div>')
+                    gr.HTML('<div class="cf-section-label">Connection</div>')
                     api_status = gr.HTML(initial_api_status())
-
-                    api_key_input = gr.Textbox(
-                        label="API key",
-                        placeholder="Paste your Civitai API key",
-                        type="password",
-                        elem_id="cf_api_key",
-                    )
-
-                    with gr.Row():
-                        btn_connect_api = gr.Button(
-                            "Connect API",
-                            variant="primary",
-                            elem_id="cf_btn_connect",
+                    with gr.Accordion("Connection settings", open=False):
+                        api_key_input = gr.Textbox(
+                            label="API key",
+                            placeholder="Paste your Civitai API key",
+                            type="password",
+                            elem_id="cf_api_key",
                         )
-                        btn_check_api = gr.Button("Verify", variant="secondary")
-
-                    with gr.Row():
-                        btn_get_api_key = gr.Button("Get API Key ↗", variant="secondary")
-                        btn_disconnect_api = gr.Button("Disconnect", variant="secondary")
-
-                    with gr.Accordion("How API authentication works", open=False):
+                        with gr.Row():
+                            btn_connect_api = gr.Button("Connect API", variant="primary", elem_id="cf_btn_connect")
+                            btn_check_api = gr.Button("Verify", variant="secondary")
+                        with gr.Row():
+                            btn_get_api_key = gr.Button("Get API Key ↗", variant="secondary")
+                            btn_disconnect_api = gr.Button("Disconnect", variant="secondary")
                         gr.HTML(connection_help_html())
 
                 with gr.Group(elem_id="cf_capture_card"):
                     gr.HTML('<div class="cf-section-label">Capture & download</div>')
-
-                    with gr.Row(variant="panel"):
-                        sniper = gr.Checkbox(label="Sniper capture", value=True)
-                        auto = gr.Checkbox(label="Auto download", value=True)
-
                     url_box = gr.Textbox(
-                        label="Model links",
+                        label="Model or file links",
                         lines=2,
-                        placeholder="Copy or paste civitai.com/models/... links",
+                        placeholder="Paste /models/... or /api/download/models/... links",
                         elem_id="cf_dropzone",
                         show_label=False,
                     )
-
+                    btn_send = gr.Button("Send now", variant="primary")
+                    with gr.Row(variant="panel"):
+                        sniper = gr.Checkbox(label="Sniper capture", value=True)
+                        auto = gr.Checkbox(label="Auto download", value=True)
                     with gr.Row():
-                        btn_folder = gr.Button("Open LoRA Folder", variant="secondary")
-                        btn_reload_frame = gr.Button("Reload Panel", variant="secondary")
-
+                        btn_folder = gr.Button("Open model folder", variant="secondary")
+                        btn_reload_frame = gr.Button("Reload Civitai", variant="secondary")
                     with gr.Accordion("Advanced", open=False):
-                        th_slider = gr.Slider(
-                            1,
-                            10,
-                            5,
-                            step=1,
-                            label="Concurrent downloads",
-                        )
-                        btn_open_civitai = gr.Button(
-                            "Open Civitai in Browser ↗",
-                            variant="secondary",
-                        )
+                        th_slider = gr.Slider(1, 10, 5, step=1, label="Concurrent downloads")
+                        btn_open_civitai = gr.Button("Open Civitai in Browser ↗", variant="secondary")
 
                 with gr.Group(elem_id="cf_activity_card"):
                     gr.HTML('<div class="cf-section-label">Activity</div>')
                     with gr.Row():
-                        btn_retry = gr.Button("Retry failed", variant="primary")
+                        btn_retry = gr.Button("Retry failed", variant="secondary")
                         btn_clear = gr.Button("Clear", variant="secondary")
-
                     log_box = gr.Textbox(
                         label="",
                         show_label=False,
-                        lines=15,
-                        value="IDLE\nCopy a Civitai model link to start.",
+                        lines=8,
+                        value="IDLE\nCopy or paste a Civitai model/file link.",
                         interactive=False,
                         elem_id="cf_terminal",
                     )
@@ -846,6 +827,8 @@ def on_ui_tabs():
             inputs=[url_box, sniper, auto, th_slider],
             outputs=[url_box, log_box],
         )
+        btn_send.click(fn=send_now, inputs=[url_box, th_slider], outputs=[url_box, action_status])
+        url_box.submit(fn=send_now, inputs=[url_box, th_slider], outputs=[url_box, action_status])
         btn_clear.click(fn=reset_all, outputs=[url_box, log_box])
         btn_retry.click(fn=retry_failed, inputs=[th_slider], outputs=[action_status])
         btn_folder.click(fn=open_loras, outputs=[action_status])
@@ -862,10 +845,7 @@ def on_ui_tabs():
             inputs=[api_key_input],
             outputs=[api_status, api_key_input],
         )
-        btn_disconnect_api.click(
-            fn=disconnect_api,
-            outputs=[api_status, api_key_input],
-        )
+        btn_disconnect_api.click(fn=disconnect_api, outputs=[api_status, api_key_input])
         btn_reload_frame.click(fn=reload_civitai_frame, outputs=[civitai_frame])
 
     return [(cf_tab, "CivitaiFlow", "cf_tab")]
