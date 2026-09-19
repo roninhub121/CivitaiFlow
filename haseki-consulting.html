@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0a0c10">
+<title>HASEKI — Technology & Automation Studio</title>
+<meta name="description" content="Arquitectura tecnológica, automatización, sistemas empresariales, ciberseguridad e infraestructura para empresas que necesitan operar mejor.">
+<style>
+:root{
+  --bg:#090b0f;--panel:#0f131a;--panel2:#121821;--text:#f4f7fb;--muted:#9ba8b8;
+  --line:rgba(255,255,255,.09);--accent:#7cf7c8;--accent2:#7aa8ff;--shadow:0 24px 80px rgba(0,0,0,.38);
+  --radius:24px;--radius-sm:16px;--max:1180px;
+}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{
+  margin:0;background:
+  radial-gradient(900px 500px at 75% -10%,rgba(122,168,255,.13),transparent 60%),
+  radial-gradient(750px 420px at 12% 8%,rgba(124,247,200,.08),transparent 62%),
+  var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  line-height:1.55;overflow-x:hidden
+}
+a{color:inherit;text-decoration:none}button,input,textarea{font:inherit}
+.wrap{width:min(calc(100% - 40px),var(--max));margin:auto}
+.nav{position:sticky;top:0;z-index:20;background:rgba(9,11,15,.72);backdrop-filter:blur(18px);border-bottom:1px solid var(--line)}
+.navin{height:76px;display:flex;align-items:center;justify-content:space-between}
+.brand{display:flex;align-items:center;gap:12px;font-weight:800;letter-spacing:.12em;font-size:14px}
+.logo{width:34px;height:34px;border:1px solid rgba(255,255,255,.17);border-radius:11px;display:grid;place-items:center;background:linear-gradient(145deg,rgba(124,247,200,.13),rgba(122,168,255,.08))}
+.logo svg{width:19px;height:19px}.navlinks{display:flex;gap:26px;color:#c6cfdb;font-size:14px}.navlinks a:hover{color:white}
+.cta{display:inline-flex;align-items:center;justify-content:center;gap:10px;padding:13px 18px;border-radius:999px;background:var(--text);color:#0b0e12;font-weight:750;font-size:14px;border:1px solid rgba(255,255,255,.15);transition:.2s}
+.cta:hover{transform:translateY(-1px);box-shadow:0 10px 35px rgba(255,255,255,.10)}
+.cta.ghost{background:rgba(255,255,255,.035);color:var(--text);border-color:var(--line)}
+.hero{padding:92px 0 60px}.eyebrow{display:inline-flex;align-items:center;gap:9px;padding:8px 12px;border:1px solid var(--line);border-radius:999px;color:#c7d2de;font-size:12px;text-transform:uppercase;letter-spacing:.12em;background:rgba(255,255,255,.025)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 18px rgba(124,247,200,.9)}
+.heroGrid{display:grid;grid-template-columns:1.2fr .8fr;gap:56px;align-items:center;margin-top:30px}
+h1{font-size:clamp(54px,8vw,98px);line-height:.96;letter-spacing:-.055em;margin:0;max-width:900px}
+.grad{background:linear-gradient(90deg,#fff 10%,#cce9ff 48%,#9ff5d2 98%);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero p{font-size:19px;color:var(--muted);max-width:670px;margin:26px 0 30px}.heroBtns{display:flex;gap:12px;flex-wrap:wrap}
+.micro{margin-top:28px;display:flex;gap:18px;flex-wrap:wrap;color:#8290a1;font-size:12px}.micro span{display:flex;align-items:center;gap:7px}.micro i{width:5px;height:5px;border-radius:50%;background:#586474}
+.visual{position:relative;min-height:460px}.orb{position:absolute;border-radius:50%;filter:blur(2px)}
+.orb.a{width:190px;height:190px;background:radial-gradient(circle at 35% 35%,rgba(124,247,200,.44),rgba(124,247,200,.02) 68%);right:50px;top:6px}
+.orb.b{width:240px;height:240px;background:radial-gradient(circle at 55% 45%,rgba(122,168,255,.40),rgba(122,168,255,.01) 70%);left:4px;bottom:18px}
+.console{position:absolute;inset:56px 12px 24px 42px;border:1px solid rgba(255,255,255,.11);border-radius:28px;background:linear-gradient(180deg,rgba(18,24,33,.88),rgba(11,14,19,.92));box-shadow:var(--shadow);padding:18px;backdrop-filter:blur(10px)}
+.topdots{display:flex;gap:7px}.topdots b{width:7px;height:7px;border-radius:50%;background:#384251}
+.metric{margin-top:28px;padding:18px;border:1px solid var(--line);border-radius:18px;background:rgba(255,255,255,.025)}
+.metric small{color:#7f8ea0}.metric strong{display:block;font-size:28px;margin-top:4px}.bar{height:7px;background:#171d25;border-radius:99px;margin-top:13px;overflow:hidden}.bar span{display:block;height:100%;width:78%;background:linear-gradient(90deg,var(--accent2),var(--accent));border-radius:99px}
+.flow{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px}.node{padding:12px;border-radius:13px;background:#0d1218;border:1px solid var(--line);font-size:11px;color:#9facba}.node b{display:block;color:white;font-size:12px;margin-bottom:3px}
+.section{padding:92px 0}.sectionTitle{display:grid;grid-template-columns:.8fr 1.2fr;gap:40px;align-items:end;margin-bottom:34px}
+.kicker{color:var(--accent);font-size:12px;font-weight:800;letter-spacing:.13em;text-transform:uppercase}
+h2{font-size:clamp(36px,5vw,62px);line-height:1.02;letter-spacing:-.045em;margin:8px 0 0}.lead{color:var(--muted);font-size:18px;max-width:620px}
+.pains{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.pain{min-height:170px;border:1px solid var(--line);border-radius:20px;padding:20px;background:rgba(255,255,255,.018)}
+.pain .n{font-size:12px;color:#667487}.pain h3{margin:28px 0 8px;font-size:17px}.pain p{margin:0;color:#8e9bad;font-size:13px}
+.services{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.service{position:relative;min-height:280px;padding:24px;border-radius:24px;background:linear-gradient(180deg,rgba(18,24,33,.9),rgba(13,17,23,.74));border:1px solid var(--line);overflow:hidden;transition:.25s}
+.service:hover{transform:translateY(-4px);border-color:rgba(124,247,200,.24)}.service:after{content:"";position:absolute;width:140px;height:140px;border-radius:50%;right:-55px;bottom:-65px;background:radial-gradient(circle,rgba(124,247,200,.11),transparent 70%)}
+.icon{width:42px;height:42px;border-radius:13px;border:1px solid var(--line);display:grid;place-items:center;color:var(--accent);background:#0c1117;font-weight:800}
+.service h3{font-size:20px;margin:28px 0 10px}.service p{color:var(--muted);font-size:14px}.tags{display:flex;gap:7px;flex-wrap:wrap;margin-top:22px}.tag{font-size:11px;color:#9cabbc;border:1px solid var(--line);border-radius:99px;padding:6px 9px;background:rgba(255,255,255,.02)}
+.arch{border:1px solid var(--line);border-radius:30px;padding:28px;background:linear-gradient(145deg,rgba(18,24,32,.9),rgba(10,13,17,.96));box-shadow:var(--shadow)}
+.archHead{display:flex;justify-content:space-between;gap:18px;align-items:center;margin-bottom:24px}.archHead h3{margin:0;font-size:22px}.archHead span{color:#7f8b9a;font-size:12px}
+.layers{display:grid;grid-template-columns:1fr 46px 1fr 46px 1fr;align-items:stretch;gap:10px}.layer{padding:22px;border:1px solid var(--line);border-radius:19px;background:rgba(255,255,255,.025)}.layer small{color:#738194}.layer b{display:block;font-size:17px;margin:7px 0 11px}.layer ul{padding:0;margin:0;list-style:none;color:#94a1b0;font-size:12px}.layer li{padding:5px 0;border-bottom:1px dashed rgba(255,255,255,.06)}.arrow{display:grid;place-items:center;color:#506074}
+.cases{display:grid;grid-template-columns:1.2fr .8fr;gap:14px}.case{border:1px solid var(--line);border-radius:25px;padding:26px;background:rgba(255,255,255,.02)}.case.big{min-height:400px;background:radial-gradient(500px 200px at 70% 0%,rgba(122,168,255,.11),transparent 70%),rgba(255,255,255,.02)}.case small{color:#758396;text-transform:uppercase;letter-spacing:.12em}.case h3{font-size:27px;margin:20px 0 12px;letter-spacing:-.02em}.case p{color:#95a2b2}.caseStat{display:flex;gap:24px;margin-top:35px;flex-wrap:wrap}.caseStat div strong{display:block;font-size:25px}.caseStat div span{font-size:11px;color:#7e8b9b}.stack{display:grid;gap:14px}.stack .case{min-height:193px}
+.process{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.step{padding:23px;border-left:1px solid var(--line)}.step strong{font-size:12px;color:var(--accent)}.step h3{margin:18px 0 8px;font-size:20px}.step p{color:#8997a7;font-size:13px}
+.about{display:grid;grid-template-columns:.9fr 1.1fr;gap:48px;align-items:center}.portrait{height:430px;border-radius:28px;border:1px solid var(--line);background:
+linear-gradient(145deg,rgba(124,247,200,.10),transparent 40%),
+linear-gradient(325deg,rgba(122,168,255,.14),transparent 45%),
+#0f141b;position:relative;overflow:hidden}.portrait:before{content:"SYSTEMS\A OVER\A SOFTWARE";white-space:pre;position:absolute;left:30px;bottom:28px;font-weight:900;font-size:58px;line-height:.84;letter-spacing:-.06em;color:rgba(255,255,255,.08)}
+.about p{color:var(--muted)}.bullets{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:24px}.bullet{border:1px solid var(--line);border-radius:14px;padding:13px;color:#b8c2cf;font-size:13px}
+.contact{border:1px solid var(--line);border-radius:32px;padding:36px;background:radial-gradient(600px 280px at 100% 0,rgba(124,247,200,.10),transparent 60%),#0f141b}
+.contactGrid{display:grid;grid-template-columns:.85fr 1.15fr;gap:44px}.contact h2{font-size:50px}.contact p{color:var(--muted)}form{display:grid;gap:10px}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}input,textarea{width:100%;border:1px solid var(--line);background:#0b0f14;color:white;border-radius:13px;padding:14px 15px;outline:none}textarea{min-height:120px;resize:vertical}input:focus,textarea:focus{border-color:rgba(124,247,200,.35)}.submit{cursor:pointer;border:0;margin-top:4px}
+.formmsg{font-size:12px;color:#7f8d9d;min-height:18px}
+footer{padding:34px 0 50px;color:#6f7c8c;font-size:12px}.foot{display:flex;justify-content:space-between;gap:20px;border-top:1px solid var(--line);padding-top:24px}
+.reveal{opacity:0;transform:translateY(14px);transition:.6s ease}.reveal.in{opacity:1;transform:none}
+@media(max-width:900px){
+ .navlinks{display:none}.hero{padding-top:62px}.heroGrid,.sectionTitle,.about,.contactGrid,.cases{grid-template-columns:1fr}.visual{min-height:380px}
+ .pains{grid-template-columns:1fr 1fr}.services{grid-template-columns:1fr 1fr}.layers{grid-template-columns:1fr}.arrow{transform:rotate(90deg);min-height:26px}.process{grid-template-columns:1fr 1fr}
+}
+@media(max-width:620px){
+ .wrap{width:min(calc(100% - 24px),var(--max))}.nav .cta{display:none}h1{font-size:54px}.hero p{font-size:17px}.console{inset:40px 0 10px 0}
+ .pains,.services,.process,.bullets,.row{grid-template-columns:1fr}.section{padding:70px 0}.contact{padding:24px}.contact h2{font-size:39px}.foot{flex-direction:column}
+}
+</style>
+</head>
+<body>
+<nav class="nav">
+  <div class="wrap navin">
+    <a class="brand" href="#inicio">
+      <span class="logo"><svg viewBox="0 0 24 24" fill="none"><path d="M4 5h5v5H4V5Zm11 0h5v5h-5V5ZM4 14h5v5H4v-5Zm11 0h5v5h-5v-5Z" stroke="currentColor" stroke-width="1.5"/><path d="M9 7.5h6M6.5 10v4M17.5 10v4M9 16.5h6" stroke="currentColor" stroke-width="1.5"/></svg></span>
+      HASEKI
+    </a>
+    <div class="navlinks">
+      <a href="#servicios">Servicios</a><a href="#enfoque">Enfoque</a><a href="#casos">Casos</a><a href="#nosotros">Nosotros</a>
+    </div>
+    <a class="cta" href="#contacto">Hablemos <span>↗</span></a>
+  </div>
+</nav>
+
+<main id="inicio">
+<section class="hero">
+  <div class="wrap">
+    <span class="eyebrow"><span class="dot"></span> Technology & Automation Studio</span>
+    <div class="heroGrid">
+      <div>
+        <h1 class="grad">Sistemas que sí trabajan juntos.</h1>
+        <p>Diseñamos, integramos y automatizamos tecnología para empresas que ya superaron los parches, los procesos manuales y las plataformas desconectadas.</p>
+        <div class="heroBtns">
+          <a class="cta" href="#contacto">Cuéntame tu proyecto <span>↗</span></a>
+          <a class="cta ghost" href="#servicios">Explorar servicios</a>
+        </div>
+        <div class="micro"><span><i></i> Arquitectura</span><span><i></i> Automatización</span><span><i></i> Ciberseguridad</span><span><i></i> Sistemas empresariales</span></div>
+      </div>
+      <div class="visual reveal">
+        <div class="orb a"></div><div class="orb b"></div>
+        <div class="console">
+          <div class="topdots"><b></b><b></b><b></b></div>
+          <div class="metric"><small>Operational maturity</small><strong>78%</strong><div class="bar"><span></span></div></div>
+          <div class="flow">
+            <div class="node"><b>CRM</b>clientes · ventas</div>
+            <div class="node"><b>ERP</b>finanzas · pedidos</div>
+            <div class="node"><b>AI</b>automatización</div>
+            <div class="node"><b>Identity</b>acceso · SSO</div>
+            <div class="node"><b>Data</b>KPIs · BI</div>
+            <div class="node"><b>Cloud</b>apps · infra</div>
+          </div>
+          <div class="metric"><small>Principio de diseño</small><strong style="font-size:18px">Menos fricción. Más control.</strong></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="enfoque">
+  <div class="wrap">
+    <div class="sectionTitle reveal">
+      <div><div class="kicker">El problema real</div><h2>No necesitas otra herramienta aislada.</h2></div>
+      <p class="lead">La mayoría de los problemas tecnológicos no vienen de “falta de software”, sino de procesos fragmentados, ownership difuso, integraciones pobres y decisiones sin arquitectura.</p>
+    </div>
+    <div class="pains">
+      <article class="pain reveal"><div class="n">01</div><h3>Operación manual</h3><p>Excel, mensajes y pasos repetitivos donde debería existir un flujo claro.</p></article>
+      <article class="pain reveal"><div class="n">02</div><h3>Sistemas desconectados</h3><p>CRM, ERP, ecommerce y datos funcionando como islas separadas.</p></article>
+      <article class="pain reveal"><div class="n">03</div><h3>Seguridad reactiva</h3><p>Accesos, cuentas y dispositivos sin un modelo de control consistente.</p></article>
+      <article class="pain reveal"><div class="n">04</div><h3>Proveedores sin contexto</h3><p>Cada proveedor resuelve su pieza, pero nadie diseña el sistema completo.</p></article>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="servicios">
+  <div class="wrap">
+    <div class="sectionTitle reveal">
+      <div><div class="kicker">Capacidades</div><h2>De la estrategia a producción.</h2></div>
+      <p class="lead">Entramos donde más duele: diagnóstico, diseño, integración, automatización y ejecución técnica con foco en operación real.</p>
+    </div>
+    <div class="services">
+      <article class="service reveal"><div class="icon">01</div><h3>Technology Strategy</h3><p>Diagnóstico tecnológico, arquitectura objetivo, roadmap, evaluación de proveedores y decisiones de plataforma.</p><div class="tags"><span class="tag">Assessment</span><span class="tag">Roadmap</span><span class="tag">Fit-gap</span></div></article>
+      <article class="service reveal"><div class="icon">02</div><h3>AI & Automation</h3><p>Automatizamos tareas y procesos con agentes, integraciones, workflows y modelos de IA donde sí existe retorno operativo.</p><div class="tags"><span class="tag">Agents</span><span class="tag">Workflows</span><span class="tag">Integrations</span></div></article>
+      <article class="service reveal"><div class="icon">03</div><h3>Business Systems</h3><p>CRM, ERP, portales B2B, sistemas internos y conexiones entre plataformas comerciales y operativas.</p><div class="tags"><span class="tag">CRM</span><span class="tag">ERP</span><span class="tag">B2B</span></div></article>
+      <article class="service reveal"><div class="icon">04</div><h3>Cybersecurity</h3><p>Identidad, hardening, gobierno de accesos, MFA, dispositivos, posture review y reducción de superficie de ataque.</p><div class="tags"><span class="tag">Identity</span><span class="tag">Hardening</span><span class="tag">Governance</span></div></article>
+      <article class="service reveal"><div class="icon">05</div><h3>Cloud & Infrastructure</h3><p>Arquitectura cloud, redes, observabilidad, operación y plataformas listas para crecer sin convertirse en deuda técnica.</p><div class="tags"><span class="tag">Cloud</span><span class="tag">Networks</span><span class="tag">Observability</span></div></article>
+      <article class="service reveal"><div class="icon">06</div><h3>Digital Products</h3><p>Diseño y construcción de aplicaciones internas, portales y productos digitales conectados con tu operación real.</p><div class="tags"><span class="tag">Web Apps</span><span class="tag">Portals</span><span class="tag">APIs</span></div></article>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <div class="arch reveal">
+      <div class="archHead"><div><div class="kicker">Systems thinking</div><h3>Diseñamos el sistema completo, no solo una pantalla.</h3></div><span>Business → Integration → Platform</span></div>
+      <div class="layers">
+        <div class="layer"><small>01 · NEGOCIO</small><b>Procesos & reglas</b><ul><li>Ventas y servicio</li><li>Aprobaciones</li><li>Operación y finanzas</li><li>Gobierno y ownership</li></ul></div>
+        <div class="arrow">→</div>
+        <div class="layer"><small>02 · INTEGRACIÓN</small><b>Datos & automatización</b><ul><li>APIs y eventos</li><li>Orquestación</li><li>Identidad y permisos</li><li>Observabilidad</li></ul></div>
+        <div class="arrow">→</div>
+        <div class="layer"><small>03 · PLATAFORMA</small><b>Apps & infraestructura</b><ul><li>CRM / ERP</li><li>Portales y apps</li><li>Cloud</li><li>Seguridad</li></ul></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="casos">
+  <div class="wrap">
+    <div class="sectionTitle reveal">
+      <div><div class="kicker">Experiencia aplicada</div><h2>Problemas complejos, aterrizados.</h2></div>
+      <p class="lead">Casos representativos presentados de forma anónima. El objetivo no es presumir logos: es mostrar el tipo de complejidad que sabemos ordenar.</p>
+    </div>
+    <div class="cases">
+      <article class="case big reveal"><small>Arquitectura empresarial</small><h3>Plataforma multiárea conectada a operación, datos e identidad.</h3><p>Diseño de una plataforma modular para centralizar procesos internos, experiencia de usuario, permisos y conectividad con sistemas empresariales existentes.</p><div class="caseStat"><div><strong>10+</strong><span>MÓDULOS DE NEGOCIO</span></div><div><strong>SSO</strong><span>IDENTIDAD CENTRAL</span></div><div><strong>API</strong><span>INTEGRACIÓN POR CONTRATO</span></div></div></article>
+      <div class="stack">
+        <article class="case reveal"><small>Commercial systems</small><h3>CRM + ERP + B2B sin duplicar autoridad.</h3><p>Mapeo funcional, ownership por dominio, fit-gap y diseño de integración para evitar procesos paralelos.</p></article>
+        <article class="case reveal"><small>Security & operations</small><h3>Gobierno de identidad y endpoints.</h3><p>Baseline de seguridad, hardening, control de acceso y operación preparada para escalar.</p></article>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <div class="sectionTitle reveal"><div><div class="kicker">Cómo trabajamos</div><h2>Menos PowerPoint. Más claridad ejecutable.</h2></div><p class="lead">Cada proyecto debe dejar decisiones, arquitectura, ownership y siguientes pasos claros; no otra capa de confusión.</p></div>
+    <div class="process">
+      <article class="step reveal"><strong>01 / DISCOVER</strong><h3>Entender</h3><p>Procesos, dolores, sistemas, personas, riesgos y restricciones.</p></article>
+      <article class="step reveal"><strong>02 / DEFINE</strong><h3>Diseñar</h3><p>Arquitectura, alcance, prioridades, reglas y criterios de éxito.</p></article>
+      <article class="step reveal"><strong>03 / BUILD</strong><h3>Ejecutar</h3><p>Integraciones, automatizaciones, aplicaciones y configuración técnica.</p></article>
+      <article class="step reveal"><strong>04 / OPERATE</strong><h3>Estabilizar</h3><p>Documentación, observabilidad, QA, transferencia y mejora continua.</p></article>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="nosotros">
+  <div class="wrap about">
+    <div class="portrait reveal"></div>
+    <div class="reveal">
+      <div class="kicker">Sobre Haseki</div><h2>Tecnología con contexto de negocio.</h2>
+      <p>No creemos en implementar software por implementar. Primero entendemos cómo funciona la operación; después definimos qué debe ser autoridad, qué debe integrarse y qué sí vale la pena automatizar.</p>
+      <p>Trabajamos con mentalidad de ingeniería y ejecución: decisiones trazables, documentación útil, sistemas mantenibles y resultados que el equipo pueda operar.</p>
+      <div class="bullets"><div class="bullet">Arquitectura antes que herramientas</div><div class="bullet">Automatización con propósito</div><div class="bullet">Seguridad desde diseño</div><div class="bullet">Documentación que sí sirve</div></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="contacto">
+  <div class="wrap">
+    <div class="contact reveal">
+      <div class="contactGrid">
+        <div><div class="kicker">Start a project</div><h2>¿Qué está frenando tu operación?</h2><p>Cuéntanos qué quieres arreglar, integrar o construir. Si podemos ayudarte, aterrizamos el problema y definimos el siguiente paso.</p></div>
+        <form id="contactForm">
+          <div class="row"><input required name="name" placeholder="Nombre"><input required type="email" name="email" placeholder="Correo"></div>
+          <input name="company" placeholder="Empresa">
+          <textarea required name="message" placeholder="Cuéntame brevemente qué quieres resolver"></textarea>
+          <button class="cta submit" type="submit">Enviar solicitud <span>↗</span></button>
+          <div class="formmsg" id="formMsg">Preview V1 — el envío se conecta cuando definamos dominio/correo.</div>
+        </form>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer><div class="wrap foot"><span>© 2026 HASEKI — Technology & Automation Studio</span><span>Mexico City · Remote</span></div></footer>
+<script>
+const obs=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting)e.target.classList.add('in')}),{threshold:.12});
+document.querySelectorAll('.reveal').forEach(el=>obs.observe(el));
+document.getElementById('contactForm').addEventListener('submit',e=>{
+ e.preventDefault();
+ const msg=document.getElementById('formMsg');
+ msg.textContent='Listo. Esta es la V1 visual; conectaremos el formulario al correo definitivo.';
+ msg.style.color='#7cf7c8';
+});
+</script>
+</body>
+</html>
